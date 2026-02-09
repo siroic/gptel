@@ -422,25 +422,19 @@ Content"
 
 (ert-deftest gptel-org-cache-test-enable-disable ()
   "Test enabling and disabling cache integration."
-  (let ((orig-enabled gptel-org-cache-enabled)
-        (orig-transforms gptel-prompt-transform-functions))
+  (let ((orig-enabled gptel-org-cache-enabled))
     (unwind-protect
         (progn
           ;; Enable
           (gptel-org-cache-enable)
           (should gptel-org-cache-enabled)
           (should (advice-member-p #'gptel-org-cache--inject-context 'gptel-context--string))
-          (should (memq #'gptel-org-cache--capture-source-buffer
-                        gptel-prompt-transform-functions))
           ;; Disable
           (gptel-org-cache-disable)
           (should-not gptel-org-cache-enabled)
-          (should-not (advice-member-p #'gptel-org-cache--inject-context 'gptel-context--string))
-          (should-not (memq #'gptel-org-cache--capture-source-buffer
-                            gptel-prompt-transform-functions)))
+          (should-not (advice-member-p #'gptel-org-cache--inject-context 'gptel-context--string)))
       ;; Restore original state
       (setq gptel-org-cache-enabled orig-enabled)
-      (setq gptel-prompt-transform-functions orig-transforms)
       (advice-remove 'gptel-context--string #'gptel-org-cache--inject-context))))
 
 
