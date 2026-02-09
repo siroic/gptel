@@ -1671,7 +1671,9 @@ headings in the response should be at level 5 or deeper."
                   (let* ((current-stars (match-string 1))
                          (new-level (+ (length current-stars) level-diff))
                          (new-stars (make-string new-level ?*)))
-                    (replace-match (concat new-stars "\\2"))))))))))))
+                    (replace-match (concat new-stars "\\2"))
+                    ;; Move point past the replacement to avoid infinite loop
+                    (goto-char (match-end 0))))))))))))
 
 (add-hook 'gptel-post-response-functions #'gptel-org--adjust-response-headings)
 
