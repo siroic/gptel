@@ -49,6 +49,7 @@
 
 (declare-function gptel-context--string "gptel-context")
 (declare-function gptel-context--insert-file-string "gptel-context")
+(declare-function gptel-fsm-info "gptel-request")
 
 (defvar org-link-bracket-re)
 (defvar org-link-angle-re)
@@ -99,6 +100,11 @@ where HASH is the content hash for cache invalidation.")
 
 (defvar-local gptel-org-cache--buffer-index nil
   "Buffer-local cache index for current session.")
+
+(defvar gptel-org-cache--source-buffer nil
+  "Dynamic variable holding the source buffer during context collection.
+This is used to access the original org buffer when the context
+string function is called from a temporary data buffer.")
 
 
 ;;; Cache location
@@ -465,40 +471,46 @@ access in future sessions."
                    (length stored-hashes)))))))
 
 ;;;###autoload
-(defun gptel-org-cache-get-context ()
+(defun gptel-org-cache-get-context (&optional buffer)
   "Get cached context for the current heading, if available and valid.
+
+BUFFER is the source buffer to use; defaults to current buffer or
+`gptel-org-cache--source-buffer' if set (during context collection).
 
 Returns the cached context string, or nil if cache is missing or stale.
 When `gptel-org-cache-auto-update' is non-nil, automatically rebuilds
 stale cache entries."
-  (when (and gptel-org-cache-enabled
-             (derived-mode-p 'org-mode))
-    (save-excursion
-      (condition-case nil
-          (progn
-            (unless (org-at-heading-p)
-              (org-back-to-heading t))
-            (let* ((cache-file (gptel-org-cache--get-location))
-                   (collected (gptel-org-cache--collect-ancestor-content))
-                   (files (plist-get collected :files))
-                   (headings (plist-get collected :headings))
-                   (heading-id (gptel-org-cache--heading-id headings))
-                   (entry (when cache-file
-                            (gptel-org-cache--find-entry cache-file heading-id))))
-              (when entry
-                (let* ((stored-hashes (plist-get entry :file-hashes))
-                       (changed (gptel-org-cache--files-changed-p files stored-hashes)))
-                  (if changed
-                      ;; Cache is stale
-                      (when gptel-org-cache-auto-update
-                        (gptel-org-cache-prepare)
-                        ;; Re-read after update
-                        (when-let* ((new-entry
-                                     (gptel-org-cache--find-entry cache-file heading-id)))
-                          (plist-get new-entry :content)))
-                    ;; Cache is valid
-                    (plist-get entry :content))))))
-        (error nil)))))
+  (let ((buf (or buffer gptel-org-cache--source-buffer (current-buffer))))
+    (when (and gptel-org-cache-enabled
+               (buffer-live-p buf)
+               (with-current-buffer buf (derived-mode-p 'org-mode)))
+      (with-current-buffer buf
+        (save-excursion
+          (condition-case nil
+              (progn
+                (unless (org-at-heading-p)
+                  (org-back-to-heading t))
+                (let* ((cache-file (gptel-org-cache--get-location))
+                       (collected (gptel-org-cache--collect-ancestor-content))
+                       (files (plist-get collected :files))
+                       (headings (plist-get collected :headings))
+                       (heading-id (gptel-org-cache--heading-id headings))
+                       (entry (when cache-file
+                                (gptel-org-cache--find-entry cache-file heading-id))))
+                  (when entry
+                    (let* ((stored-hashes (plist-get entry :file-hashes))
+                           (changed (gptel-org-cache--files-changed-p files stored-hashes)))
+                      (if changed
+                          ;; Cache is stale
+                          (when gptel-org-cache-auto-update
+                            (gptel-org-cache-prepare)
+                            ;; Re-read after update
+                            (when-let* ((new-entry
+                                         (gptel-org-cache--find-entry cache-file heading-id)))
+                              (plist-get new-entry :content)))
+                        ;; Cache is valid
+                        (plist-get entry :content))))))
+            (error nil)))))))
 
 
 ;;; Integration with gptel context
@@ -515,11 +527,23 @@ ORIG-FUN is the original context function, ARGS are its arguments."
           cached))
     (apply orig-fun args)))
 
+(defun gptel-org-cache--transform-add-context (orig-fun callback fsm)
+  "Advice to set source buffer before context collection.
+
+ORIG-FUN is `gptel--transform-add-context'.  CALLBACK and FSM are
+passed through.  This sets `gptel-org-cache--source-buffer' so
+that cache lookup can find the org buffer even when called from
+the data buffer."
+  (let ((gptel-org-cache--source-buffer
+         (plist-get (gptel-fsm-info fsm) :buffer)))
+    (funcall orig-fun callback fsm)))
+
 ;;;###autoload
 (defun gptel-org-cache-enable ()
   "Enable context caching integration with gptel."
   (interactive)
   (advice-add 'gptel-context--string :around #'gptel-org-cache--inject-context)
+  (advice-add 'gptel--transform-add-context :around #'gptel-org-cache--transform-add-context)
   (setq gptel-org-cache-enabled t)
   (message "gptel context caching enabled."))
 
@@ -528,6 +552,7 @@ ORIG-FUN is the original context function, ARGS are its arguments."
   "Disable context caching integration with gptel."
   (interactive)
   (advice-remove 'gptel-context--string #'gptel-org-cache--inject-context)
+  (advice-remove 'gptel--transform-add-context #'gptel-org-cache--transform-add-context)
   (setq gptel-org-cache-enabled nil)
   (message "gptel context caching disabled."))
 
