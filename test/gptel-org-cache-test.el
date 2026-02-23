@@ -438,5 +438,162 @@ Content"
       (advice-remove 'gptel-context--string #'gptel-org-cache--inject-context))))
 
 
+;;; Tests for parent cache inheritance
+
+(ert-deftest gptel-org-cache-test-cached-files-changed-p-unchanged ()
+  "Test cached-files-changed-p returns nil when files unchanged."
+  (gptel-org-cache-test-with-temp-files
+    (let* ((hash1 (gptel-org-cache--file-hash test-file1))
+           (hash2 (gptel-org-cache--file-hash test-file2))
+           (hash-alist `((,test-file1 . ,hash1) (,test-file2 . ,hash2))))
+      (should-not (gptel-org-cache--cached-files-changed-p hash-alist)))))
+
+(ert-deftest gptel-org-cache-test-cached-files-changed-p-modified ()
+  "Test cached-files-changed-p detects modified files."
+  (gptel-org-cache-test-with-temp-files
+    (let* ((hash1 (gptel-org-cache--file-hash test-file1))
+           (hash-alist `((,test-file1 . ,hash1))))
+      ;; Modify the file
+      (sleep-for 0.1)
+      (with-temp-file test-file1
+        (insert "Modified content\n"))
+      ;; Should detect change
+      (let ((changed (gptel-org-cache--cached-files-changed-p hash-alist)))
+        (should changed)
+        (should (member test-file1 changed))))))
+
+(ert-deftest gptel-org-cache-test-cached-files-changed-p-deleted ()
+  "Test cached-files-changed-p detects deleted files."
+  (gptel-org-cache-test-with-temp-files
+    (let* ((hash1 (gptel-org-cache--file-hash test-file1))
+           (hash-alist `((,test-file1 . ,hash1))))
+      ;; Delete the file
+      (delete-file test-file1)
+      ;; Should detect change (file no longer readable)
+      (let ((changed (gptel-org-cache--cached-files-changed-p hash-alist)))
+        (should changed)
+        (should (member test-file1 changed))))))
+
+(ert-deftest gptel-org-cache-test-parent-inheritance-basic ()
+  "Test that child headings inherit cache from parent."
+  (gptel-org-cache-test-with-temp-files
+    (with-temp-buffer
+      (delay-mode-hooks (org-mode))
+      (setq buffer-file-name source-file)
+      (insert (format "* Parent Topic\n[[file:%s]]\n** Child Task\nSome content\n" test-file1))
+      (goto-char (point-min))
+      (outline-next-heading)
+      ;; Prepare cache at parent level
+      (gptel-org-cache-prepare)
+      ;; Move to child heading - search for it directly
+      (goto-char (point-min))
+      (re-search-forward "^\\*\\* Child Task")
+      (beginning-of-line)
+      (should (looking-at "\\*\\* Child"))
+      ;; Should inherit parent's cache
+      (let ((context (gptel-org-cache-get-context)))
+        (should context)
+        (should (string-match-p "Test content 1" context))))))
+
+(ert-deftest gptel-org-cache-test-parent-inheritance-grandchild ()
+  "Test that grandchild headings inherit cache from grandparent."
+  (gptel-org-cache-test-with-temp-files
+    (with-temp-buffer
+      (delay-mode-hooks (org-mode))
+      (setq buffer-file-name source-file)
+      (insert (format "* Grandparent\n[[file:%s]]\n** Parent\n*** Grandchild\nContent\n" test-file1))
+      (goto-char (point-min))
+      (outline-next-heading)
+      ;; Prepare cache at grandparent level
+      (gptel-org-cache-prepare)
+      ;; Move to grandchild - search for it directly
+      (goto-char (point-min))
+      (re-search-forward "^\\*\\*\\* Grandchild")
+      (beginning-of-line)
+      (should (looking-at "\\*\\*\\* Grandchild"))
+      ;; Should inherit grandparent's cache
+      (let ((context (gptel-org-cache-get-context)))
+        (should context)
+        (should (string-match-p "Test content 1" context))))))
+
+(ert-deftest gptel-org-cache-test-parent-inheritance-child-extra-files ()
+  "Test parent cache works when child has additional file links."
+  (gptel-org-cache-test-with-temp-files
+    (with-temp-buffer
+      (delay-mode-hooks (org-mode))
+      (setq buffer-file-name source-file)
+      ;; Parent has file1, child adds file2
+      (insert (format "* Parent\n[[file:%s]]\n** Child\n[[file:%s]]\n" test-file1 test-file2))
+      (goto-char (point-min))
+      (outline-next-heading)
+      ;; Prepare cache at parent (only has file1)
+      (gptel-org-cache-prepare)
+      ;; Move to child
+      (outline-next-heading)
+      ;; Child should still get parent's cache even though it has extra file
+      (let ((context (gptel-org-cache-get-context)))
+        (should context)
+        (should (string-match-p "Test content 1" context))))))
+
+(ert-deftest gptel-org-cache-test-parent-inheritance-prefers-exact ()
+  "Test that exact heading cache is preferred over parent cache."
+  (gptel-org-cache-test-with-temp-files
+    (with-temp-buffer
+      (delay-mode-hooks (org-mode))
+      (setq buffer-file-name source-file)
+      (insert (format "* Parent\n[[file:%s]]\n** Child\n[[file:%s]]\n" test-file1 test-file2))
+      (goto-char (point-min))
+      (outline-next-heading)
+      ;; Prepare cache at parent
+      (gptel-org-cache-prepare)
+      ;; Move to child and prepare its own cache
+      (outline-next-heading)
+      (gptel-org-cache-prepare)
+      ;; Child's cache should include file2
+      (let ((context (gptel-org-cache-get-context)))
+        (should context)
+        ;; Should have both files since child cache includes both
+        (should (string-match-p "Test content 1" context))
+        (should (string-match-p "Test content 2" context))))))
+
+(ert-deftest gptel-org-cache-test-parent-inheritance-stale-parent ()
+  "Test that stale parent cache is not used."
+  (gptel-org-cache-test-with-temp-files
+    (with-temp-buffer
+      (delay-mode-hooks (org-mode))
+      (setq buffer-file-name source-file)
+      (insert (format "* Parent\n[[file:%s]]\n** Child\nContent\n" test-file1))
+      (goto-char (point-min))
+      (outline-next-heading)
+      ;; Prepare cache at parent
+      (gptel-org-cache-prepare)
+      ;; Modify the cached file
+      (sleep-for 0.1)
+      (with-temp-file test-file1
+        (insert "Modified content\n"))
+      ;; Move to child
+      (outline-next-heading)
+      ;; With auto-update disabled, stale parent cache should not be used
+      (let ((gptel-org-cache-auto-update nil))
+        (should-not (gptel-org-cache-get-context))))))
+
+(ert-deftest gptel-org-cache-test-find-valid-cache-no-cache ()
+  "Test find-valid-cache returns nil when no cache exists."
+  (gptel-org-cache-test-with-temp-files
+    (with-temp-buffer
+      (delay-mode-hooks (org-mode))
+      (setq buffer-file-name source-file)
+      (insert "* Heading\n** Child\n")
+      (goto-char (point-min))
+      (outline-next-heading)
+      (outline-next-heading)
+      (let* ((cache-file (gptel-org-cache--get-location))
+             (collected (gptel-org-cache--collect-ancestor-content))
+             (headings (plist-get collected :headings))
+             (files (plist-get collected :files)))
+        ;; No cache prepared, should return nil
+        (should-not (gptel-org-cache--find-valid-cache cache-file headings files))))))
+
+
 (provide 'gptel-org-cache-test)
 ;;; gptel-org-cache-test.el ends here
