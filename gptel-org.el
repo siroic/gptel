@@ -1544,18 +1544,30 @@ cleaning up after."
 
 ;;; Dynamic prefix support for subtree context
 
+(defun gptel-org--in-prompt-buffer-p ()
+  "Return non-nil if current buffer is a temporary prompt buffer.
+
+This detects gptel's temp buffers used for parsing/constructing prompts,
+where dynamic prefix adjustment should not be applied."
+  (string-prefix-p " *gptel-prompt*" (buffer-name)))
+
 (defun gptel-org--advice-prompt-prefix (orig-fun)
   "Advice for `gptel-prompt-prefix-string' to support dynamic org heading levels.
 
 ORIG-FUN is the original function.  When `gptel-org-subtree-context'
-is enabled, adjusts the prefix to use the correct heading level."
+is enabled, adjusts the prefix to use the correct heading level.
+
+Dynamic adjustment is skipped in temp prompt buffers (used for parsing)
+since those buffers don't have the proper org heading structure."
   (if gptel-org--in-prefix-advice
       (funcall orig-fun)
     (let ((gptel-org--in-prefix-advice t))
       (let ((result (funcall orig-fun)))
-        (gptel-org--debug "advice-prompt-prefix: orig=%S org-mode=%s subtree-context=%s"
-                          result (derived-mode-p 'org-mode) gptel-org-subtree-context)
-        (if (derived-mode-p 'org-mode)
+        (gptel-org--debug "advice-prompt-prefix: orig=%S org-mode=%s subtree-context=%s prompt-buf=%s"
+                          result (derived-mode-p 'org-mode) gptel-org-subtree-context
+                          (gptel-org--in-prompt-buffer-p))
+        (if (and (derived-mode-p 'org-mode)
+                 (not (gptel-org--in-prompt-buffer-p)))
             (gptel-org--dynamic-prefix-string result 'for-prompt)
           result)))))
 
@@ -1563,14 +1575,19 @@ is enabled, adjusts the prefix to use the correct heading level."
   "Advice for `gptel-response-prefix-string' to support dynamic org heading levels.
 
 ORIG-FUN is the original function.  When `gptel-org-subtree-context'
-is enabled, adjusts the prefix to use the correct heading level."
+is enabled, adjusts the prefix to use the correct heading level.
+
+Dynamic adjustment is skipped in temp prompt buffers (used for parsing)
+since those buffers don't have the proper org heading structure."
   (if gptel-org--in-prefix-advice
       (funcall orig-fun)
     (let ((gptel-org--in-prefix-advice t))
       (let ((result (funcall orig-fun)))
-        (gptel-org--debug "advice-response-prefix: orig=%S org-mode=%s subtree-context=%s"
-                          result (derived-mode-p 'org-mode) gptel-org-subtree-context)
-        (if (derived-mode-p 'org-mode)
+        (gptel-org--debug "advice-response-prefix: orig=%S org-mode=%s subtree-context=%s prompt-buf=%s"
+                          result (derived-mode-p 'org-mode) gptel-org-subtree-context
+                          (gptel-org--in-prompt-buffer-p))
+        (if (and (derived-mode-p 'org-mode)
+                 (not (gptel-org--in-prompt-buffer-p)))
             (gptel-org--dynamic-prefix-string result nil) ;nil = for response
           result)))))
 
