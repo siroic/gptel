@@ -28,6 +28,20 @@
 (require 'org-element)
 (require 'outline)
 (require 'mailcap)                    ;FIXME Avoid this somehow
+(require 'org-src)
+
+;; Register gptel-tool as a source block language with org-src to prevent
+;; org-lint warnings about unknown source block language. Tool output blocks
+;; use #+begin_src gptel-tool but don't require a Babel backend.
+(eval-when-compile
+  ;; Only run at compile time to avoid modifying org-src-lang-modes at load time
+  (when (boundp 'org-src-lang-modes)
+    (add-to-list 'org-src-lang-modes '("gptel-tool" . fundamental))))
+
+;; Ensure the language is registered at runtime for org-lint
+(with-eval-after-load 'org-src
+  (unless (assoc "gptel-tool" org-src-lang-modes)
+    (add-to-list 'org-src-lang-modes '("gptel-tool" . fundamental))))
 
 ;; Functions used for saving/restoring gptel state in Org buffers
 (defvar gptel--num-messages-to-send)
