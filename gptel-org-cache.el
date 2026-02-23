@@ -497,11 +497,9 @@ Uses gptel's context formatting to create annotated markdown."
 CALLBACK is called with the summary string, or nil on failure.
 Uses `gptel-org-cache-summary-backend' and `gptel-org-cache-summary-model'
 if set, otherwise falls back to `gptel-backend' and `gptel-model'."
-  (let ((backend (or gptel-org-cache-summary-backend gptel-backend))
-        (model (or gptel-org-cache-summary-model gptel-model)))
+  (let ((gptel-backend (or gptel-org-cache-summary-backend gptel-backend))
+        (gptel-model (or gptel-org-cache-summary-model gptel-model)))
     (gptel-request raw-context
-      :backend backend
-      :model model
       :system gptel-org-cache-summary-system-prompt
       :callback (lambda (response info)
                   (if (and response (not (plist-get info :error)))
