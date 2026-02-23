@@ -409,9 +409,12 @@ when `gptel-org-subtree-context' is enabled."
       ;; Check if we're inside a chat subtree by looking at ancestors
       (let ((inside-chat-subtree
              (save-excursion
-               (let ((in-chat nil))
+               (let ((in-chat nil)
+                     (prev-pos nil))
                  (while (and (not in-chat)
-                             (ignore-errors (outline-up-heading 1 t)))
+                             (not (eq prev-pos (point)))
+                             (progn (setq prev-pos (point))
+                                    (ignore-errors (outline-up-heading 1 t))))
                    (when (gptel-org--chat-heading-p)
                      (setq in-chat t)))
                  in-chat))))
@@ -424,39 +427,46 @@ when `gptel-org-subtree-context' is enabled."
         ;;    OR we've walked out of all chat-related subtrees
         (let ((found nil)
               (started-from-chat (and started-at-heading
-                                      (gptel-org--chat-heading-p))))
+                                      (gptel-org--chat-heading-p)))
+              (prev-pos nil))
           (gptel-org--debug "get-parent-heading-level: started-from-chat=%s" started-from-chat)
           (while (and (org-at-heading-p) (not found))
-            (let ((current-heading (buffer-substring (line-beginning-position) (line-end-position)))
-                  (is-chat (gptel-org--chat-heading-p)))
-              (gptel-org--debug "get-parent-heading-level: checking heading: %s (is-chat=%s)"
-                                current-heading is-chat)
-              (if is-chat
-                  ;; This is a chat heading, keep going up
-                  (ignore-errors (outline-up-heading 1 t))
-                ;; Not a chat heading - this is the parent if:
-                ;; - It has chat children, OR
-                ;; - We started from body/heading NOT inside a chat subtree (new conversation), OR
-                ;; - We walked up from a chat heading
-                (let ((current-level (org-outline-level))
-                      (has-chat-child nil))
-                  (save-excursion
-                    (outline-next-heading)
-                    (when (and (org-at-heading-p)
-                               (= (org-outline-level) (1+ current-level))
-                               (gptel-org--chat-heading-p))
-                      (setq has-chat-child t)))
-                  (gptel-org--debug "get-parent-heading-level: non-chat heading level=%d has-chat-child=%s"
-                                    current-level has-chat-child)
-                  (if (or has-chat-child
-                          (and (not started-at-heading)      ; Started from body text
-                               (not inside-chat-subtree))    ; and NOT inside chat subtree
-                          started-from-chat)                 ; Walked up from chat heading
-                      (setq found t)
-                    ;; No chat children, continue up
-                    (unless (ignore-errors (outline-up-heading 1 t))
-                      ;; Can't go up anymore, use this level
-                      (setq found t)))))))
+            ;; Guard against infinite loop: if point hasn't moved, stop
+            (when (eq prev-pos (point))
+              (gptel-org--debug "get-parent-heading-level: infinite loop guard triggered at %d" (point))
+              (setq found t))
+            (setq prev-pos (point))
+            (unless found
+              (let ((current-heading (buffer-substring (line-beginning-position) (line-end-position)))
+                    (is-chat (gptel-org--chat-heading-p)))
+                (gptel-org--debug "get-parent-heading-level: checking heading: %s (is-chat=%s)"
+                                  current-heading is-chat)
+                (if is-chat
+                    ;; This is a chat heading, keep going up
+                    (ignore-errors (outline-up-heading 1 t))
+                  ;; Not a chat heading - this is the parent if:
+                  ;; - It has chat children, OR
+                  ;; - We started from body/heading NOT inside a chat subtree (new conversation), OR
+                  ;; - We walked up from a chat heading
+                  (let ((current-level (org-outline-level))
+                        (has-chat-child nil))
+                    (save-excursion
+                      (outline-next-heading)
+                      (when (and (org-at-heading-p)
+                                 (= (org-outline-level) (1+ current-level))
+                                 (gptel-org--chat-heading-p))
+                        (setq has-chat-child t)))
+                    (gptel-org--debug "get-parent-heading-level: non-chat heading level=%d has-chat-child=%s"
+                                      current-level has-chat-child)
+                    (if (or has-chat-child
+                            (and (not started-at-heading)      ; Started from body text
+                                 (not inside-chat-subtree))    ; and NOT inside chat subtree
+                            started-from-chat)                 ; Walked up from chat heading
+                        (setq found t)
+                      ;; No chat children, continue up
+                      (unless (ignore-errors (outline-up-heading 1 t))
+                        ;; Can't go up anymore, use this level
+                        (setq found t))))))))
           (let ((result (if (org-at-heading-p) (org-outline-level) 0)))
             (gptel-org--debug "get-parent-heading-level: result=%d" result)
             result))))))
