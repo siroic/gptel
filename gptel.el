@@ -1960,7 +1960,7 @@ for tool call results.  INFO contains the state of the request."
                (if (derived-mode-p 'org-mode)
                    (concat
                     separator
-                    "#+begin_src gptel-tool "
+                    "#+begin_src gptel-tool\n"
                     truncated-call
                     (propertize
                      (org-escape-code-in-string (concat "\n" call "\n\n" result))
