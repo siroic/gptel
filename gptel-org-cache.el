@@ -50,6 +50,7 @@
 
 (declare-function gptel-context--string "gptel-context")
 (declare-function gptel-context--insert-file-string "gptel-context")
+(declare-function gptel-fsm-info "gptel-request")
 
 ;; Register gptel-cache as a source block language with org-src to prevent
 ;; org-lint warnings about unknown source block language. Cache content blocks
@@ -561,10 +562,39 @@ Returns the cached content string, or nil if no valid cache found."
 
 ;;; Integration with gptel context
 
+(defun gptel-org-cache--transform-inject (fsm)
+  "Transform function to inject cached context into requests.
+
+FSM is the request state machine.  This function retrieves cached
+context from the source buffer (where the request originated) and
+prepends it to the system message.
+
+This is designed to be added to `gptel-prompt-transform-functions'."
+  (when gptel-org-cache-enabled
+    (when-let* ((info (gptel-fsm-info fsm))
+                (source-buffer (plist-get info :buffer))
+                (cached-context
+                 (with-current-buffer source-buffer
+                   (gptel-org-cache-get-context))))
+      ;; Inject cached context into system message
+      (cl-etypecase gptel--system-message
+        (string
+         (setq gptel--system-message
+               (concat cached-context "\n\n" gptel--system-message)))
+        (list
+         (setcar gptel--system-message
+                 (concat cached-context "\n\n" (car gptel--system-message))))
+        (null
+         (setq gptel--system-message cached-context))))))
+
+;; Legacy advice-based injection (kept for backward compatibility)
 (defun gptel-org-cache--inject-context (orig-fun &rest args)
   "Advice to inject cached context when available.
 
-ORIG-FUN is the original context function, ARGS are its arguments."
+ORIG-FUN is the original context function, ARGS are its arguments.
+Note: This advice-based approach may not work correctly when called
+from a non-org buffer.  Prefer the transform-based approach via
+`gptel-org-cache-enable'."
   (if-let* ((cached (gptel-org-cache-get-context)))
       ;; Prepend cached context to normal context
       (let ((normal-context (apply orig-fun args)))
@@ -575,9 +605,13 @@ ORIG-FUN is the original context function, ARGS are its arguments."
 
 ;;;###autoload
 (defun gptel-org-cache-enable ()
-  "Enable context caching integration with gptel."
+  "Enable context caching integration with gptel.
+
+This adds a transform function to `gptel-prompt-transform-functions'
+that injects cached context from org files into requests."
   (interactive)
-  (advice-add 'gptel-context--string :around #'gptel-org-cache--inject-context)
+  (add-to-list 'gptel-prompt-transform-functions
+               #'gptel-org-cache--transform-inject)
   (setq gptel-org-cache-enabled t)
   (message "gptel context caching enabled."))
 
@@ -585,7 +619,9 @@ ORIG-FUN is the original context function, ARGS are its arguments."
 (defun gptel-org-cache-disable ()
   "Disable context caching integration with gptel."
   (interactive)
-  (advice-remove 'gptel-context--string #'gptel-org-cache--inject-context)
+  (setq gptel-prompt-transform-functions
+        (delq #'gptel-org-cache--transform-inject
+              gptel-prompt-transform-functions))
   (setq gptel-org-cache-enabled nil)
   (message "gptel context caching disabled."))
 
