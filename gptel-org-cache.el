@@ -482,7 +482,11 @@ access in future sessions."
 
 Returns the cached context string, or nil if cache is missing or stale.
 When `gptel-org-cache-auto-update' is non-nil, automatically rebuilds
-stale cache entries."
+stale cache entries.
+
+If no cache exists for the current heading, walks up parent headings
+to find a cached ancestor.  This allows task sub-headings to inherit
+cache from parent topic headings."
   (when (and gptel-org-cache-enabled
              (derived-mode-p 'org-mode))
     (save-excursion
@@ -493,24 +497,66 @@ stale cache entries."
             (let* ((cache-file (gptel-org-cache--get-location))
                    (collected (gptel-org-cache--collect-ancestor-content))
                    (files (plist-get collected :files))
-                   (headings (plist-get collected :headings))
-                   (heading-id (gptel-org-cache--heading-id headings))
-                   (entry (when cache-file
-                            (gptel-org-cache--find-entry cache-file heading-id))))
-              (when entry
-                (let* ((stored-hashes (plist-get entry :file-hashes))
-                       (changed (gptel-org-cache--files-changed-p files stored-hashes)))
-                  (if changed
-                      ;; Cache is stale
-                      (when gptel-org-cache-auto-update
-                        (gptel-org-cache-prepare)
-                        ;; Re-read after update
-                        (when-let* ((new-entry
-                                     (gptel-org-cache--find-entry cache-file heading-id)))
-                          (plist-get new-entry :content)))
-                    ;; Cache is valid
-                    (plist-get entry :content))))))
+                   (headings (plist-get collected :headings)))
+              (when cache-file
+                ;; Try current heading first, then walk up parents
+                (gptel-org-cache--find-valid-cache
+                 cache-file headings files))))
         (error nil)))))
+
+(defun gptel-org-cache--cached-files-changed-p (hash-alist)
+  "Check if any files in HASH-ALIST have changed.
+
+Unlike `gptel-org-cache--files-changed-p', this only checks files
+that are IN the cache, not files that might be missing from it.
+This is useful for parent cache inheritance where child headings
+may have additional file links.
+
+HASH-ALIST is ((FILE . HASH) ...).
+Returns list of changed files, or nil if all unchanged."
+  (let (changed)
+    (dolist (file-hash hash-alist)
+      (let* ((file (car file-hash))
+             (stored-hash (cdr file-hash))
+             (current-hash (gptel-org-cache--file-hash file)))
+        (unless (equal stored-hash current-hash)
+          (push file changed))))
+    (nreverse changed)))
+
+(defun gptel-org-cache--find-valid-cache (cache-file headings files)
+  "Find valid cache for HEADINGS or any parent heading path.
+
+CACHE-FILE is the cache file to search.
+HEADINGS is the full heading path from root to current.
+FILES is the list of files extracted from the heading tree.
+
+Returns the cached content string, or nil if no valid cache found."
+  (let ((current-headings headings)
+        (is-exact-heading t)
+        result)
+    ;; Try progressively shorter heading paths (current, then parents)
+    (while (and current-headings (not result))
+      (let* ((heading-id (gptel-org-cache--heading-id current-headings))
+             (entry (gptel-org-cache--find-entry cache-file heading-id)))
+        (when entry
+          (let* ((stored-hashes (plist-get entry :file-hashes))
+                 ;; For exact heading, check all files; for parents, only cached files
+                 (changed (if is-exact-heading
+                              (gptel-org-cache--files-changed-p files stored-hashes)
+                            (gptel-org-cache--cached-files-changed-p stored-hashes))))
+            (if changed
+                ;; Cache is stale - only auto-update if this is the exact heading
+                (when (and gptel-org-cache-auto-update is-exact-heading)
+                  (gptel-org-cache-prepare)
+                  (when-let* ((new-entry
+                               (gptel-org-cache--find-entry cache-file heading-id)))
+                    (setq result (plist-get new-entry :content))))
+              ;; Cache is valid
+              (setq result (plist-get entry :content))))))
+      ;; Move up to parent heading path
+      (setq current-headings (butlast current-headings))
+      (setq is-exact-heading nil))
+    result))
 
 
 ;;; Integration with gptel context
