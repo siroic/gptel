@@ -852,7 +852,7 @@ contents."
             ;; User edits to clean up can potentially insert a tool-call header
             ;; that is propertized.  Tool call headers should not be
             ;; propertized.
-            (when (looking-at-p "[[:space:]]*#\\+begin_tool")
+            (when (looking-at-p "[[:space:]]*#\\+begin_src gptel-tool")
               (goto-char (match-end 0)))
             ;; TODO this code is able to put the point behind prev-pt, which
             ;; makes the region inverted.  The `max' catches this, but really
