@@ -45,10 +45,22 @@
 
 (require 'org)
 (require 'org-element)
+(require 'org-src)
 (eval-when-compile (require 'cl-lib))
 
 (declare-function gptel-context--string "gptel-context")
 (declare-function gptel-context--insert-file-string "gptel-context")
+
+;; Register gptel-cache as a source block language with org-src to prevent
+;; org-lint warnings about unknown source block language. Cache content blocks
+;; use #+begin_src gptel-cache but don't require a Babel backend.
+(eval-when-compile
+  (when (boundp 'org-src-lang-modes)
+    (add-to-list 'org-src-lang-modes '("gptel-cache" . fundamental))))
+
+(with-eval-after-load 'org-src
+  (unless (assoc "gptel-cache" org-src-lang-modes)
+    (add-to-list 'org-src-lang-modes '("gptel-cache" . fundamental))))
 
 (defvar org-link-bracket-re)
 (defvar org-link-angle-re)
@@ -288,9 +300,9 @@ DATA is a plist with :content, :files, :headings, :file-hashes."
      (mapconcat (lambda (f) (format "- [[file:%s]]" f)) files "\n")
      "\n\n"
      "** Cached Context\n"
-     "#+begin_example\n"
-     content
-     "\n#+end_example\n\n")))
+     "#+begin_src gptel-cache\n"
+     (org-escape-code-in-string content)
+     "\n#+end_src\n\n")))
 
 
 ;;; Cache file operations
@@ -329,8 +341,8 @@ Returns a plist with :beg, :end, :file-hashes, :content, or nil if not found."
             ;; Extract cached context
             (save-excursion
               (when (re-search-forward "^\\*\\* Cached Context" end t)
-                (when (re-search-forward "#\\+begin_example\n\\(\\(?:.*\n\\)*?\\)#\\+end_example" end t)
-                  (setq content (match-string 1)))))
+                (when (re-search-forward "#\\+begin_src gptel-cache\n\\(\\(?:.*\n\\)*?\\)#\\+end_src" end t)
+                  (setq content (org-unescape-code-in-string (match-string 1))))))
             (list :beg beg :end end :file-hashes file-hashes :content content)))))))
 
 (defun gptel-org-cache--write-entry (cache-file heading-id data)
