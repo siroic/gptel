@@ -269,6 +269,15 @@ to the LLM, and after a text insertion."
   :type 'hook
   :group 'gptel)
 
+(defcustom gptel-abort-hook nil
+  "Hook run in the gptel buffer after a request is aborted.
+
+This hook is called in the buffer where the request was active,
+after all other abort cleanup has completed.  Use this to perform
+additional cleanup of UI elements or state."
+  :type 'hook
+  :group 'gptel)
+
 (defcustom gptel-save-state-hook nil
   "Hook run before gptel saves model parameters to a file.
 
@@ -1412,6 +1421,8 @@ Perform UI updates and run post-response hooks."
               (start-marker (plist-get info :position))
               (tracking-marker (or (plist-get info :tracking-marker)
                                    start-marker)))
+    ;; Clean up any tool call confirmation overlays in the buffer
+    (gptel--clean-tool-overlays-in-buffer gptel-buffer)
     (if-let* ((gptel-window (get-buffer-window gptel-buffer 'visible)))
         (with-selected-window gptel-window
           (mapc (lambda (f) (funcall f info)) (plist-get info :post))
@@ -1431,7 +1442,8 @@ Perform UI updates and run post-response hooks."
                         (insert gptel-response-separator
                                 (gptel-prompt-prefix-string)))))
     (with-current-buffer gptel-buffer
-      (when gptel-mode (gptel--update-status  " Abort" 'error)))))
+      (when gptel-mode (gptel--update-status  " Abort" 'error))
+      (run-hooks 'gptel-abort-hook))))
 
 (defun gptel--update-wait (fsm)
   "Update gptel's status after sending a request."
@@ -1841,6 +1853,7 @@ Note: This tool call preview API is currently experimental.")
   "<mouse-1>" #'gptel--dispatch-tool-calls
   "C-c C-c" #'gptel--accept-tool-calls
   "C-c C-k" #'gptel--reject-tool-calls
+  "C-c C-d" #'gptel--deny-tool-calls
   "C-c C-i" #'gptel--inspect-tool-calls)
 
 (defun gptel--display-tool-calls (tool-calls info &optional use-minibuffer)
@@ -1893,8 +1906,10 @@ USE-MINIBUFFER is non-nil)."
                (actions-string
                 (concat (propertize "Run tools: " 'face 'font-lock-string-face)
                         (propertize "C-c C-c" 'face 'help-key-binding)
-                        (propertize ", Cancel request: " 'face 'font-lock-string-face)
+                        (propertize ", Cancel: " 'face 'font-lock-string-face)
                         (propertize "C-c C-k" 'face 'help-key-binding)
+                        (propertize ", Deny: " 'face 'font-lock-string-face)
+                        (propertize "C-c C-d" 'face 'help-key-binding)
                         (propertize ", Inspect: " 'face 'font-lock-string-face)
                         (propertize "C-c C-i" 'face 'help-key-binding)))
                (confirm-strings)
@@ -2069,6 +2084,33 @@ NAME and ARG-VALUES are the name and arguments for the call."
       (forward-line 0)
       (hl-line-highlight))))
 
+(defun gptel--clean-tool-overlay (ov)
+  "Clean up tool call overlay OV and its associated previews.
+
+Tears down any preview handlers, deletes the prompt region, and
+removes the overlay."
+  (when (and (overlayp ov) (overlay-buffer ov))
+    (with-current-buffer (overlay-buffer ov)
+      (when-let* ((preview-handles (overlay-get ov 'previews)))
+        (dolist (func-to-handle preview-handles)
+          (when (car func-to-handle) (apply func-to-handle))))
+      (when-let* ((prompt-ov (overlay-get ov 'prompt))
+                  ((overlay-buffer prompt-ov))
+                  (inhibit-read-only t))
+        (delete-region (overlay-start prompt-ov)
+                       (overlay-end prompt-ov))))
+    (delete-overlay ov)))
+
+(defun gptel--clean-tool-overlays-in-buffer (&optional buf)
+  "Clean up all tool call overlays in BUF (defaults to current buffer).
+
+This finds and removes all overlays with the `gptel-tool' property,
+tearing down their previews and prompt regions."
+  (with-current-buffer (or buf (current-buffer))
+    (dolist (ov (overlays-in (point-min) (point-max)))
+      (when (overlay-get ov 'gptel-tool)
+        (gptel--clean-tool-overlay ov)))))
+
 (defun gptel--accept-tool-calls (&optional response ov)
   (interactive (pcase-let ((`(,resp . ,o) (get-char-property-and-overlay
                                            (point) 'gptel-tool)))
@@ -2085,17 +2127,7 @@ NAME and ARG-VALUES are the name and arguments for the call."
                         (apply (gptel-tool-function tool-spec) arg-values)
                       (error (mapconcat #'gptel--to-string errdata " ")))))
                (funcall process-tool-result result))))
-  (when (and (overlayp ov) (overlay-buffer ov))
-    (with-current-buffer (overlay-buffer ov)
-      (when-let* ((preview-handles (overlay-get ov 'previews)))
-        (dolist (func-to-handle preview-handles)
-          (when (car func-to-handle) (apply func-to-handle))))
-      (when-let* ((prompt-ov (overlay-get ov 'prompt))
-                  ((overlay-buffer prompt-ov))
-                  (inhibit-read-only t))
-        (delete-region (overlay-start prompt-ov)
-                       (overlay-end prompt-ov))))
-    (delete-overlay ov)))
+  (gptel--clean-tool-overlay ov))
 
 (defun gptel--reject-tool-calls (&optional _response ov)
   (interactive (pcase-let ((`(,resp . ,o) (get-char-property-and-overlay
@@ -2104,17 +2136,7 @@ NAME and ARG-VALUES are the name and arguments for the call."
   (gptel--update-status " Tools cancelled" 'error)
   (message (substitute-command-keys
             "Tool calls canceled.  \\[gptel-menu] to continue them!"))
-  (when (and (overlayp ov) (overlay-buffer ov))
-    (with-current-buffer (overlay-buffer ov)
-      (when-let* ((preview-handles (overlay-get ov 'previews)))
-        (dolist (func-to-handle preview-handles)
-          (when (car func-to-handle) (apply func-to-handle))))
-      (when-let* ((prompt-ov (overlay-get ov 'prompt))
-                  ((overlay-buffer prompt-ov))
-                  (inhibit-read-only t))
-        (delete-region (overlay-start prompt-ov)
-                       (overlay-end prompt-ov))))
-    (delete-overlay ov))
+  (gptel--clean-tool-overlay ov)
   ;; Run post-response hooks and insert prompt prefix, like gptel--handle-abort
   (when-let* ((info (and gptel--fsm-last (gptel-fsm-info gptel--fsm-last)))
               (gptel-buffer (plist-get info :buffer))
@@ -2131,15 +2153,35 @@ NAME and ARG-VALUES are the name and arguments for the call."
                         (insert gptel-response-separator
                                 (gptel-prompt-prefix-string)))))))
 
+(defun gptel--deny-tool-calls (&optional response ov)
+  "Deny tool calls and inform the LLM about the denial.
+
+Unlike `gptel--reject-tool-calls' which freezes the FSM, this
+sends a denial result back to the LLM for each tool call so it
+can adjust its approach.  RESPONSE is the list of pending tool
+calls and OV is the tool call overlay."
+  (interactive (pcase-let ((`(,resp . ,o) (get-char-property-and-overlay
+                                           (point) 'gptel-tool)))
+                 (list resp o)))
+  (gptel--update-status " Tools denied, informing LLM..." 'warning)
+  (message "Denying tool calls and informing the LLM...")
+  (cl-loop for (_tool-spec _arg-values process-tool-result) in response
+           do (funcall process-tool-result
+                       "Error: The user denied execution of this tool call.  \
+Adjust your approach or ask the user for guidance."))
+  (gptel--clean-tool-overlay ov))
+
 (defun gptel--dispatch-tool-calls (choice)
   (interactive
    (list
     (let ((choices '((?y "yes") (?n "do nothing")
-                     (?k "cancel request") (?i "inspect call(s)"))))
+                     (?k "cancel request") (?d "deny and inform LLM")
+                     (?i "inspect call(s)"))))
       (read-multiple-choice "Run tool calls? " choices))))
   (pcase (car choice)
     (?y (call-interactively #'gptel--accept-tool-calls))
     (?k (call-interactively #'gptel--reject-tool-calls))
+    (?d (call-interactively #'gptel--deny-tool-calls))
     (?i (gptel--inspect-fsm gptel--fsm-last))))
 
 
