@@ -1866,16 +1866,13 @@ USE-MINIBUFFER is non-nil)."
                'read-only))
           (let* ((minibuffer-allow-text-properties t)
                  (backend-name (gptel-backend-name (plist-get info :backend)))
-                 (prompt (format "%s wants to run " backend-name))
-                 (accepted-calls nil))
+                 (prompt (format "%s wants to run " backend-name)))
             (map-y-or-n-p
              (lambda (tool-call-spec)
                (concat prompt (propertize (gptel-tool-name (car tool-call-spec))
                                           'face 'font-lock-keyword-face)
                        ": "))
-             (lambda (tcs)
-               (push tcs accepted-calls)
-               (gptel--accept-tool-calls (list tcs) nil))
+             (lambda (tcs) (gptel--accept-tool-calls (list tcs) nil))
              tool-calls '("tool call" "tool calls" "run")
              `((?i ,(lambda (_) (save-window-excursion
                              (with-selected-window
@@ -1890,23 +1887,7 @@ USE-MINIBUFFER is non-nil)."
                                                       (exit-recursive-edit)))
                                  (current-local-map)))
                                (recursive-edit) nil)))
-                   "inspect call(s)")))
-            ;; Handle denied tool calls: send denial results so the FSM
-            ;; can advance and the LLM is informed about denied tools.
-            (let ((denied-calls
-                   (cl-remove-if (lambda (tc) (memq tc accepted-calls))
-                                 tool-calls)))
-              (when denied-calls
-                (if accepted-calls
-                    ;; Partial denial: send denial results for rejected tools
-                    ;; so the FSM counter advances and the LLM knows
-                    (dolist (tc denied-calls)
-                      (pcase-let ((`(,_tool-spec ,_arg-values ,process-tool-result) tc))
-                        (funcall process-tool-result
-                                 "Tool execution denied by user.")))
-                  ;; Full denial: abort the session
-                  (when gptel--fsm-last
-                    (gptel--fsm-transition gptel--fsm-last 'ABRT))))))
+                   "inspect call(s)"))))
         ;; Prompt for confirmation from the chat buffer
         (let* ((backend-name (gptel-backend-name (plist-get info :backend)))
                (actions-string
@@ -2120,8 +2101,9 @@ NAME and ARG-VALUES are the name and arguments for the call."
   (interactive (pcase-let ((`(,resp . ,o) (get-char-property-and-overlay
                                            (point) 'gptel-tool)))
                  (list resp o)))
-  (message "Tool calls canceled.")
-  ;; Clean up overlay and previews
+  (gptel--update-status " Tools cancelled" 'error)
+  (message (substitute-command-keys
+            "Tool calls canceled.  \\[gptel-menu] to continue them!"))
   (when (and (overlayp ov) (overlay-buffer ov))
     (with-current-buffer (overlay-buffer ov)
       (when-let* ((preview-handles (overlay-get ov 'previews)))
@@ -2133,11 +2115,21 @@ NAME and ARG-VALUES are the name and arguments for the call."
         (delete-region (overlay-start prompt-ov)
                        (overlay-end prompt-ov))))
     (delete-overlay ov))
-  ;; Abort the session by transitioning FSM to ABRT state.
-  ;; This runs gptel--handle-abort which handles post-response hooks,
-  ;; prompt prefix insertion, and status update.
-  (when gptel--fsm-last
-    (gptel--fsm-transition gptel--fsm-last 'ABRT)))
+  ;; Run post-response hooks and insert prompt prefix, like gptel--handle-abort
+  (when-let* ((info (and gptel--fsm-last (gptel-fsm-info gptel--fsm-last)))
+              (gptel-buffer (plist-get info :buffer))
+              (start-marker (plist-get info :position))
+              (tracking-marker (or (plist-get info :tracking-marker)
+                                   start-marker)))
+    (with-current-buffer gptel-buffer
+      (run-hook-with-args
+       'gptel-post-response-functions
+       (marker-position start-marker) (marker-position tracking-marker))
+      ;; Insert prompt prefix AFTER post-response hooks have run
+      (when (and gptel-mode tracking-marker (not (plist-get info :in-place)))
+        (save-excursion (goto-char tracking-marker)
+                        (insert gptel-response-separator
+                                (gptel-prompt-prefix-string)))))))
 
 (defun gptel--dispatch-tool-calls (choice)
   (interactive
