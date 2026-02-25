@@ -2158,18 +2158,24 @@ tearing down their previews and prompt regions."
 
 Unlike `gptel--reject-tool-calls' which freezes the FSM, this
 sends a denial result back to the LLM for each tool call so it
-can adjust its approach.  RESPONSE is the list of pending tool
-calls and OV is the tool call overlay."
+can adjust its approach.  The user is prompted for a reason.
+RESPONSE is the list of pending tool calls and OV is the tool
+call overlay."
   (interactive (pcase-let ((`(,resp . ,o) (get-char-property-and-overlay
                                            (point) 'gptel-tool)))
                  (list resp o)))
-  (gptel--update-status " Tools denied, informing LLM..." 'warning)
-  (message "Denying tool calls and informing the LLM...")
-  (cl-loop for (_tool-spec _arg-values process-tool-result) in response
-           do (funcall process-tool-result
-                       "Error: The user denied execution of this tool call.  \
-Adjust your approach or ask the user for guidance."))
-  (gptel--clean-tool-overlay ov))
+  (let* ((reason (read-string "Reason for denying (empty for none): "))
+         (denial-msg
+          (if (string-empty-p reason)
+              "Error: The user denied execution of this tool call.  \
+Adjust your approach or ask the user for guidance."
+            (format "Error: The user denied execution of this tool call.  \
+Reason: %s" reason))))
+    (gptel--update-status " Tools denied, informing LLM..." 'warning)
+    (message "Denying tool calls and informing the LLM...")
+    (cl-loop for (_tool-spec _arg-values process-tool-result) in response
+             do (funcall process-tool-result denial-msg))
+    (gptel--clean-tool-overlay ov)))
 
 (defun gptel--dispatch-tool-calls (choice)
   (interactive
