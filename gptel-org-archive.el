@@ -518,18 +518,25 @@ For each DONE task, this will:
 
 ;;; Integration with org-archive
 
+;;;###autoload
 (defun gptel-org-archive--setup-location ()
   "Set up archive location for AI document buffers.
 
 This sets `org-archive-location' buffer-locally for files matching
-the *-ai.org pattern."
+the *-ai.org pattern.  Must be autoloaded so it runs on
+`org-mode-hook' before the user explicitly loads gptel-org-archive."
   (when (and (buffer-file-name)
              (derived-mode-p 'org-mode))
-    (when-let* ((archive-loc (gptel-org-archive--get-location)))
+    (when-let* ((file (buffer-file-name))
+                (base (file-name-sans-extension file))
+                (_is-ai (string-suffix-p "-ai" base))
+                (archive-loc (concat base "-archive."
+                                     (file-name-extension file))))
       (setq-local org-archive-location
                   (concat archive-loc "::* Archived Tasks")))))
 
 ;; Automatically set archive location for AI documents
+;;;###autoload
 (add-hook 'org-mode-hook #'gptel-org-archive--setup-location)
 
 
