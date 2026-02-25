@@ -1020,14 +1020,40 @@ ARGS are the original function call arguments."
       (apply send-fun args)
     (let ((gptel-org--in-send-with-props t))
       (if (derived-mode-p 'org-mode)
-          (pcase-let* ((`(,gptel--preset ,gptel--system-message ,gptel-backend ,gptel-model
-                          ,gptel-temperature ,gptel-max-tokens
-                          ,gptel--num-messages-to-send ,gptel-tools)
-                        (seq-mapn (lambda (a b) (or a b))
-                                  (gptel-org--entry-properties)
-                                  (list gptel--preset gptel--system-message gptel-backend gptel-model
-                                        gptel-temperature gptel-max-tokens
-                                        gptel--num-messages-to-send gptel-tools)))
+          (pcase-let* ((`(,org-preset ,org-system ,org-backend ,org-model
+                          ,org-temperature ,org-tokens ,org-num ,org-tools)
+                        (gptel-org--entry-properties))
+                       ;; When a preset is found in org properties, apply it to
+                       ;; expand its settings into individual variables.  Then
+                       ;; overlay any explicitly-set org properties on top.
+                       (`(,preset-system ,preset-backend ,preset-model
+                          ,preset-temperature ,preset-tokens ,preset-num ,preset-tools)
+                        (if org-preset
+                            (let (p-system p-backend p-model p-temperature p-tokens p-num p-tools)
+                              (gptel--apply-preset
+                               org-preset
+                               (lambda (sym val)
+                                 (pcase sym
+                                   ('gptel--system-message (setq p-system val))
+                                   ('gptel-backend (setq p-backend val))
+                                   ('gptel-model (setq p-model val))
+                                   ('gptel-temperature (setq p-temperature val))
+                                   ('gptel-max-tokens (setq p-tokens val))
+                                   ('gptel--num-messages-to-send (setq p-num val))
+                                   ('gptel-tools (setq p-tools val))
+                                   ('gptel--preset nil)))) ;ignore, already have it
+                              (list p-system p-backend p-model
+                                    p-temperature p-tokens p-num p-tools))
+                          (list nil nil nil nil nil nil nil)))
+                       ;; Priority: org explicit properties > preset values > buffer defaults
+                       (gptel--preset (or org-preset gptel--preset))
+                       (gptel--system-message (or org-system preset-system gptel--system-message))
+                       (gptel-backend (or org-backend preset-backend gptel-backend))
+                       (gptel-model (or org-model preset-model gptel-model))
+                       (gptel-temperature (or org-temperature preset-temperature gptel-temperature))
+                       (gptel-max-tokens (or org-tokens preset-tokens gptel-max-tokens))
+                       (gptel--num-messages-to-send (or org-num preset-num gptel--num-messages-to-send))
+                       (gptel-tools (or org-tools preset-tools gptel-tools))
                        ;; Check for model tag on user heading (takes precedence)
                        (user-heading-model (gptel-org--get-user-heading-model))
                        ;; Check for model tag on TODO heading (also takes precedence)
@@ -1042,6 +1068,8 @@ ARGS are the original function call arguments."
                 (setq gptel-model model))
               (gptel-org--debug "Using model from heading tag: %s"
                                 (gptel--model-name gptel-model)))
+            (when org-preset
+              (gptel-org--debug "Applied preset from org property: %s" org-preset))
             (apply send-fun args))
         (apply send-fun args)))))
 
