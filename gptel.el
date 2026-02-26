@@ -1920,10 +1920,13 @@ USE-MINIBUFFER is non-nil)."
                            (text-property-search-backward 'gptel 'response)
                            (point)))
                (preview-handlers)
-               (ov (or (cdr-safe (get-char-property-and-overlay
-                                  start-marker 'gptel-tool))
-                       (make-overlay ov-start (or tracking-marker start-marker)
-                                     nil nil nil)))
+               (ov (or (cl-find-if
+                       (lambda (o)
+                         (and (overlay-get o 'gptel-tool)
+                              (eq (overlay-get o 'gptel-info) info)))
+                       (overlays-at start-marker))
+                      (make-overlay ov-start (or tracking-marker start-marker)
+                                    nil nil nil)))
                (prompt-ov))
           ;; If the cursor is at the overlay-end, it ends up outside, so move it back
           (unless tracking-marker
@@ -1964,6 +1967,7 @@ USE-MINIBUFFER is non-nil)."
           (when preview-handlers (overlay-put ov 'previews preview-handlers))
           (overlay-put ov 'mouse-face 'highlight)
           (overlay-put ov 'gptel-tool tool-calls)
+          (overlay-put ov 'gptel-info info)
           (overlay-put ov 'help-echo
                        (concat "Tool call(s) requested: " actions-string))
           (overlay-put ov 'keymap gptel-tool-call-actions-map)
@@ -2136,22 +2140,25 @@ tearing down their previews and prompt regions."
   (gptel--update-status " Tools cancelled" 'error)
   (message (substitute-command-keys
             "Tool calls canceled.  \\[gptel-menu] to continue them!"))
-  (gptel--clean-tool-overlay ov)
-  ;; Run post-response hooks and insert prompt prefix, like gptel--handle-abort
-  (when-let* ((info (and gptel--fsm-last (gptel-fsm-info gptel--fsm-last)))
-              (gptel-buffer (plist-get info :buffer))
-              (start-marker (plist-get info :position))
-              (tracking-marker (or (plist-get info :tracking-marker)
-                                   start-marker)))
-    (with-current-buffer gptel-buffer
-      (run-hook-with-args
-       'gptel-post-response-functions
-       (marker-position start-marker) (marker-position tracking-marker))
-      ;; Insert prompt prefix AFTER post-response hooks have run
-      (when (and gptel-mode tracking-marker (not (plist-get info :in-place)))
-        (save-excursion (goto-char tracking-marker)
-                        (insert gptel-response-separator
-                                (gptel-prompt-prefix-string)))))))
+  ;; Get info from the overlay before cleaning it, fall back to gptel--fsm-last
+  (let ((info (or (and (overlayp ov) (overlay-buffer ov)
+                       (overlay-get ov 'gptel-info))
+                  (and gptel--fsm-last (gptel-fsm-info gptel--fsm-last)))))
+    (gptel--clean-tool-overlay ov)
+    (when-let* ((info)
+                (gptel-buffer (plist-get info :buffer))
+                (start-marker (plist-get info :position))
+                (tracking-marker (or (plist-get info :tracking-marker)
+                                     start-marker)))
+      (with-current-buffer gptel-buffer
+        (run-hook-with-args
+         'gptel-post-response-functions
+         (marker-position start-marker) (marker-position tracking-marker))
+        ;; Insert prompt prefix AFTER post-response hooks have run
+        (when (and gptel-mode tracking-marker (not (plist-get info :in-place)))
+          (save-excursion (goto-char tracking-marker)
+                          (insert gptel-response-separator
+                                  (gptel-prompt-prefix-string))))))))
 
 (defun gptel--deny-tool-calls (&optional response ov)
   "Deny tool calls and inform the LLM about the denial.
