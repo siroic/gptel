@@ -1106,9 +1106,22 @@ ARGS are the original function call arguments."
     (when tools
       (setq tools (cl-loop
                    for tname in (split-string tools)
-                   for tool = (with-demoted-errors "gptel: %S"
-                                (gptel-get-tool tname))
-                   if tool collect tool else do
+                   if (string-prefix-p "@" tname)
+                   ;; Category reference: expand to all tools in category
+                   nconc (let ((cat-tools
+                                (with-demoted-errors "gptel: %S"
+                                  (gptel-get-tool (substring tname 1)))))
+                           (if (listp cat-tools) cat-tools
+                             (prog1 nil
+                               (display-warning
+                                '(gptel org tools)
+                                (format "Tool category %s not found, ignoring"
+                                        (substring tname 1))))))
+                   else
+                   ;; Individual tool name
+                   if (with-demoted-errors "gptel: %S"
+                        (gptel-get-tool tname))
+                   collect it else do
                    (display-warning
                     '(gptel org tools)
                     (format "Tool %s not found, ignoring" tname)))))
