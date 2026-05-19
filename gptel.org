@@ -1,3 +1,78 @@
 * MUST READ
 * Future plans
 * TODOs
+** AI-DONE Apply GPTEL_PRESET to backend/model in =gptel-org--send-with-props=
+CLOSED: in commit bf867c3 on branch orga
+*** Origin
+Reported in =~/siro-orga/siro-orga.petri.org= ("The model specified in
+the GPTEL_PRESET prompt file is not obeyed").  When sending from an
+org buffer that has =:GPTEL_PRESET: <name>:= in a heading's
+PROPERTIES drawer, the model and backend selected via =gptel-menu=
+are used instead of the ones declared by the preset.  Other settings
+declared as explicit =GPTEL_*= properties on the heading already work.
+
+*** Investigation summary
+=gptel-org--send-with-props= (in =gptel-org.el=, lines ~493–510) reads
+the heading properties via =gptel-org--entry-properties= and merges
+them over the buffer's =gptel-backend= / =gptel-model= / etc.  When
+=GPTEL_PRESET= is present it is interned and let-bound to
+=gptel--preset=, but =gptel--apply-preset= is *not* called, so the
+preset's =:backend= / =:model= / =:system= / =:tools= keys never
+expand into the corresponding =let= bindings.  Result: the preset
+name is propagated but the preset's contents are silently ignored
+along the send path.
+
+The legacy fork (=~/.emacs.d/quelpa/build/gptel/gptel-org.el=, lines
+~1012–1107) handles this correctly: when an =org-preset= is found, it
+calls =gptel--apply-preset= with a setter callback that captures the
+preset's expansion into local =preset-*= variables, and then merges
+with the priority
+
+  : org explicit property > preset value > buffer default
+
+via =(or org-X preset-X buffer-default)= for each setting.
+
+*** Mission
+Port the preset-expansion behaviour from the legacy fork into the
+active fork's =gptel-org--send-with-props=.  Strictly limited scope:
+*do not* port the legacy fork's heading-tag model lookup
+(=gptel-org-model-from-user-tag= / =gptel-org-model-from-todo-tag=)
+or the extra =GPTEL_INCLUDE_REASONING= / =GPTEL_REASONING_EFFORT=
+properties — those are separate features and out of scope here.
+
+Settings to honour from the preset (matching the existing set read by
+=gptel-org--entry-properties=):
+
+- =gptel--system-message=
+- =gptel-backend=
+- =gptel-model=
+- =gptel-temperature=
+- =gptel-max-tokens=
+- =gptel--num-messages-to-send=
+- =gptel-tools=
+
+Priority for each: org explicit property > preset value > buffer
+default (matches legacy behaviour).
+
+*** Approach
+1. In =gptel-org--send-with-props=, after destructuring the org
+   properties, if =org-preset= is non-nil, call =gptel--apply-preset=
+   with a setter callback that captures preset values into local
+   =preset-system=, =preset-backend=, =preset-model=, etc.
+2. Build the final =let= bindings using =(or org-X preset-X
+   buffer-default)= for each setting.
+3. Keep the existing advice registration unchanged.
+4. Verify with a small test org file containing a preset that sets a
+   different backend/model than the buffer default.
+
+Reference legacy implementation: =~/.emacs.d/quelpa/build/gptel/gptel-org.el::1012=.
+
+*** Out of scope (potential follow-ups)
+- Heading-tag model overrides (=:haiku:=, =:sonnet:= etc.).
+- =GPTEL_INCLUDE_REASONING= / =GPTEL_REASONING_EFFORT= properties.
+- Recursion guard (=gptel-org--in-send-with-props=) — only needed if
+  =gptel-request= is also advised; current code only advises
+  =gptel-send= and =gptel--suffix-send=.
+- Tool-category =@catname= expansion in =GPTEL_TOOLS=.
+
+These can be filed as sibling TODOs if needed.
