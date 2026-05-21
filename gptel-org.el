@@ -272,14 +272,18 @@ depend on the value of `gptel-org-branching-context', which see."
                    collect (point) into ends
                    finally return (cons prompt-end ends))))
             (gptel--with-buffer-copy org-buf nil nil
-              (cl-loop for start in start-bounds
-                       for end in end-bounds
-                       do (insert-buffer-substring org-buf start end)
-                       (goto-char (point-min)))
-              ;; Strip `read-only' text properties copied from the source
-              ;; buffer (e.g. org-transclusion regions) so the subsequent
-              ;; modifications below don't error with "Text is read-only".
+              ;; Bind `inhibit-read-only' for the whole assembly: source text
+              ;; may carry `read-only' properties (e.g. org-transclusion
+              ;; regions) that would otherwise make later iterations of the
+              ;; loop (which insert at `point-min', i.e. inside the just-
+              ;; inserted read-only region) error with "Text is read-only".
+              ;; Properties are stripped after assembly so subsequent
+              ;; modifications don't need the binding.
               (let ((inhibit-read-only t))
+                (cl-loop for start in start-bounds
+                         for end in end-bounds
+                         do (insert-buffer-substring org-buf start end)
+                         (goto-char (point-min)))
                 (remove-text-properties (point-min) (point-max) '(read-only nil)))
               (goto-char (point-max))
               (gptel-org--unescape-tool-results)
