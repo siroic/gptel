@@ -276,6 +276,11 @@ depend on the value of `gptel-org-branching-context', which see."
                        for end in end-bounds
                        do (insert-buffer-substring org-buf start end)
                        (goto-char (point-min)))
+              ;; Strip `read-only' text properties copied from the source
+              ;; buffer (e.g. org-transclusion regions) so the subsequent
+              ;; modifications below don't error with "Text is read-only".
+              (let ((inhibit-read-only t))
+                (remove-text-properties (point-min) (point-max) '(read-only nil)))
               (goto-char (point-max))
               (gptel-org--unescape-tool-results)
               (gptel-org--strip-block-headers)
