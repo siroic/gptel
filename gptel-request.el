@@ -1073,7 +1073,13 @@ For BUF, START, END and BODY-THUNK see `gptel--with-buffer-copy'."
                       gptel-stream gptel-include-reasoning gptel--request-params
                       gptel-temperature gptel-max-tokens gptel-cache))
         (set (make-local-variable sym) (buffer-local-value sym buf)))
-      (when (and start end) (insert-buffer-substring buf start end))
+      (when (and start end)
+        (insert-buffer-substring buf start end)
+        ;; Strip `read-only' text properties copied from the source buffer
+        ;; (e.g. org-transclusion regions) so subsequent prompt-buffer
+        ;; modifications don't error with "Text is read-only".
+        (let ((inhibit-read-only t))
+          (remove-text-properties (point-min) (point-max) '(read-only nil))))
       (setq major-mode (buffer-local-value 'major-mode buf))
       (funcall body-thunk))))
 
