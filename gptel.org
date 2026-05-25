@@ -354,6 +354,9 @@ Pitfalls:
 
 Resolved: see body above and =*** Decisions=.
 
+***** FEEDBACK Should all AI discussion responses have org-id
+- This includes reasoning, respond, tool etc
+
 **** AI-DO Move reasoning storage to plain =REASONED= headings
 Same idea: =REASONED= heading body holds reasoning text; walker emits
 =(:role 'reasoning …)= only when =gptel-include-reasoning= is non-nil
@@ -379,6 +382,76 @@ replaces old one, no toggle, no compat layer").
 
 This is a fork-divergence decision — explicit user approval required
 before deleting any upstream function.
+
+**** AI-DO Cross-reference IB producer side in Origin / Key file references
+The parser implementation in this TODO is the read-side counterpart of
+the indirect-buffer (IB) /producer/ side, which is already AI-DONE in
+=~/siro-orga= (see
+[[file:~/siro-orga/siro-orga.org::*Replace GPTEL_BOUNDS]]).  Make that
+dependency explicit so the parser implementor knows where the
+vocabulary the walker must recognize is authoritatively defined.
+
+Concretely:
+- Add a short paragraph to =*** Origin= linking to
+  =~/siro-orga/siro-org-indirect.el= (IB primitives) and
+  =~/siro-orga/siro-gptel-headings.el= / =siro-gptel-hooks.el=
+  (segment lifecycle).
+- Add rows to =*** Key file references= covering:
+  - =siro-org-indirect.el= — =insert-child-of-top=, =close=, =up=,
+    autocorrect RET
+  - The =#+SEQ_TODO= line in =~/siro-orga/siro-orga.org= — canonical
+    keyword set
+  - =~/siro-orga/agents/*.org= =:state-words= triples — per-agent
+    BASE/-ING/-ED vocabulary
+- Mention the alignment in =*** Decisions= so future readers see the
+  contract (keyword = segment type, no fences, =-ING= → =-ED= on close,
+  atomic tools written once).
+
+Acceptance: a fresh reader of this TODO can follow links from =Origin=
+to the producer-side code without searching.  Pure documentation
+change; no code touched.
+
+**** AI-DO Decide :ID: policy for non-tool segments (REASONED, RESPONDED)
+Resolves [[*FEEDBACK Should all AI discussion responses have org-id][FEEDBACK Should all AI discussion responses have org-id]].
+
+Background: the parser-side decision at
+[[*Decision: tool-call correlation IDs — use =org-id= with API id as value]]
+specifies =:ID:= on tool-call headings carrying the wire id
+(=toolu_01abc= / =call_…=) for request/response correlation.  Open
+question: do REASONED and RESPONDED headings also get =:ID:=?
+
+Options to consider in the TODO body:
+
+1. /Tool-calls only/ — only BASH/EVAL/GREP/… and GATHERED/EXECUTED/…
+   headings carry =:ID:= (current de facto state).  Pro: minimal
+   property-drawer noise; matches the "heading keyword is the
+   delimiter" principle.  Con: no stable handle for re-generation or
+   external references to a specific assistant turn.
+2. /All AI segments/ — every AI-produced heading (REASONING/REASONED,
+   RESPONDING/RESPONDED, plus tool calls) gets =:ID:=.  Pro: every
+   segment is addressable by =org-id-goto=; enables future features
+   like "regenerate just this turn", cross-doc references to
+   reasoning, audit trails.  Con: drawer on every heading; need a
+   policy for IDs of streaming segments that may be killed mid-flight.
+3. /All AI segments + FEEDBACK/ — option 2 plus user FEEDBACK
+   headings, making the entire AI ↔ user dialogue addressable.
+
+Decision should specify:
+- Which heading keywords get =:ID:=.
+- ID source: =org-id-new= for non-tool segments vs API wire id for
+  tool calls; how the two coexist (different namespace prefixes? same
+  property different value spaces?).
+- When the ID is written: on IB open (=-ING= state) or on IB close
+  (=-ED= state)?  Open-time is safer for crash recovery; close-time
+  matches "the heading is complete".
+- Whether the parser-side walker uses =:ID:= for anything beyond tool
+  correlation (e.g., as the =:id= key in the canonical plist for all
+  segments).
+
+Acceptance: =FEEDBACK Should all AI discussion responses have org-id=
+is resolved with a recorded decision; if option 2 or 3 is chosen, a
+follow-up sub-AI-DO is filed to wire =:ID:= insertion into the
+IB-producer hooks in =~/siro-orga/siro-gptel-hooks.el=.
 
 *** Out of scope
 - Streaming insertion mechanics (=gptel-curl--stream-insert-response=):
