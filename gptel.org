@@ -101,6 +101,18 @@ Deep-research analysis (see discussion thread) confirmed:
   reasoning are roundtripped through textual fences.  With structural
   storage (property drawers / org-element values) they disappear.
 
+This parser work is the read-side counterpart of the indirect-buffer
+(IB) /producer/ side, already AI-DONE in =~/siro-orga= (see
+[[file:~/siro-orga/siro-orga.org::*Replace GPTEL_BOUNDS]]).  The IB
+primitives live in =~/siro-orga/siro-org-indirect.el=
+(=insert-child-of-top=, =close=, =up=, autocorrect RET); the segment
+lifecycle that emits AI-DO/FEEDBACK/REASONED/tool-call headings lives
+in =~/siro-orga/siro-gptel-headings.el= and
+=~/siro-orga/siro-gptel-hooks.el=.  The canonical TODO-keyword set the
+walker must recognize is defined by the =#+SEQ_TODO= line in
+=~/siro-orga/siro-orga.org= plus the =:state-words= triples in
+=~/siro-orga/agents/*.org= (per-agent BASE/-ING/-ED vocabulary).
+
 *** Discussion highlights
 - Non-org buffers (markdown/text/code) are one-shot AI queries: there
   is no multi-turn role structure to reconstruct, so all the text
@@ -153,7 +165,7 @@ All changes should live in siro-orga where possible; touch =~/gptel/=
 only when unavoidable.
 
 *** TODOs
-**** AI-DO Validation experiment: parallel pipeline comparator
+**** AI-DONE Validation experiment: parallel pipeline comparator
 Smallest reversible probe.  Zero production code paths touched.
 
 1. Write =siro-gptel-parse--canonical-messages= returning a list of
@@ -182,13 +194,48 @@ Success criterion: byte-equal JSON for a representative AI-DO subtree.
 If diffs appear, they reveal corner cases the buffer-copy pipeline is
 implicitly handling — capture each as a sub-TODO.
 
-**** AI-DO Define and document the canonical message plist schema
+***** Outcomes (Phase 1)
+Implemented in =~/siro-orga= on branch =feature/gptel-headings-phase1=.
+The canonical-message read-side runs alongside the existing walker;
+production paths untouched.
+- =siro-gptel-headings.el= — new function
+  =siro-gptel-headings-walk-conversation--canonical= emits tool-call,
+  tool-result, and reasoning headings as first-class canonical plists.
+  The existing walker stays in place and remains the producer used by
+  the =:around= method.
+- =siro-gptel-format.el= — new file. =cl-defgeneric=
+  =siro-gptel-format-messages= with a =gptel-openai= method that
+  produces byte-equal output with the synthetic-buffer pipeline by
+  re-fencing tool/reasoning messages into surrounding assistant
+  content.
+- =test/siro-gptel-comparator-test.el= — four ert-deftests covering
+  simple user/assistant, tool-call (BASH), and reasoning (both
+  =siro-gptel-resend-reasoning= states).  All assert
+  =(equal pipeline-A pipeline-B)=.
+- Fixtures: =test/fixtures/comparator-{simple,tool-call,reasoning}.org=.
+
+Result: 30/30 tests passing.  No diffs surfaced — the canonical
+pipeline reproduces the synthetic-buffer output exactly for the
+representative cases.  JSON-level byte-equality is implicit since
+both pipelines feed the identical downstream encoder.
+
+**** AI-DONE Define and document the canonical message plist schema
 Document the schema in =siro-gptel-parse.el= (or new
 =siro-gptel-messages.el=) with docstring + ert fixtures.  Zero behavior
 change; this is the contract that subsequent TODOs depend on.
 
 Note: the =:id= field's sourcing strategy is deferred to the tool-call
 AI-DO below; the schema reserves the slot regardless.
+
+***** Outcomes (Phase 1)
+- =~/siro-orga/siro-gptel-messages.el= — new file documenting the
+  canonical plist schema in the file Commentary, plus:
+  - =siro-gptel-messages-roles= — defconst of valid role symbols.
+  - =siro-gptel-messages-plist-p= — per-role predicate.
+  - =siro-gptel-messages-validate= — list validator that signals on the
+    first malformed entry (used by formatters).
+- The schema documents =:id= as a deferred slot, sourcing TBD by the
+  tool-call correlation AI-DO below.
 
 **** AI-DO Per-backend canonical→wire formatters
 Add =gptel--format-messages= generic + methods for each backend:
@@ -383,7 +430,7 @@ replaces old one, no toggle, no compat layer").
 This is a fork-divergence decision — explicit user approval required
 before deleting any upstream function.
 
-**** AI-DO Cross-reference IB producer side in Origin / Key file references
+**** AI-DONE Cross-reference IB producer side in Origin / Key file references
 The parser implementation in this TODO is the read-side counterpart of
 the indirect-buffer (IB) /producer/ side, which is already AI-DONE in
 =~/siro-orga= (see
@@ -410,6 +457,16 @@ Concretely:
 Acceptance: a fresh reader of this TODO can follow links from =Origin=
 to the producer-side code without searching.  Pure documentation
 change; no code touched.
+
+***** Outcomes (Phase 1)
+- Cross-reference paragraph added to =*** Origin= linking the IB
+  producer side, segment lifecycle, and canonical keyword sources.
+- Six rows added to =*** Key file references= covering IB primitives,
+  canonical message schema, canonical wire formatter, the new
+  canonical walker function, the =#+SEQ_TODO= keyword set, and the
+  per-agent state-words.
+- The =*** Decisions= alignment note was already covered by the
+  existing wording; no separate amendment needed.
 
 **** AI-DO Decide :ID: policy for non-tool segments (REASONED, RESPONDED)
 Resolves [[*FEEDBACK Should all AI discussion responses have org-id][FEEDBACK Should all AI discussion responses have org-id]].
@@ -477,3 +534,9 @@ IB-producer hooks in =~/siro-orga/siro-gptel-hooks.el=.
 | TODO-state classifier                | =siro-gptel-headings.el::206=    |
 | AI-DO bounds detection               | =siro-gptel-headings.el::144=    |
 | Lifecycle hooks                      | =siro-gptel-hooks.el::206=       |
+| IB primitives (producer side)        | =~/siro-orga/siro-org-indirect.el= |
+| Canonical message schema             | =~/siro-orga/siro-gptel-messages.el= |
+| Canonical wire formatter             | =~/siro-orga/siro-gptel-format.el= |
+| Canonical-message walker (Phase 1)   | =siro-gptel-headings.el::*walk-conversation--canonical= |
+| Canonical TODO-keyword set           | =~/siro-orga/siro-orga.org= (=#+SEQ_TODO=) |
+| Per-agent state-words                | =~/siro-orga/agents/*.org= =:state-words= |
