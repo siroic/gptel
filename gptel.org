@@ -340,17 +340,6 @@ described the old "synthesize transient buffer" mechanism.  Both were
 refreshed in the same commit to describe the current canonical+formatter
 =:around= behavior.
 
-**** AI-DO Non-org one-shot extractor
-Trivial helper for non-org buffers (markdown, text, code modes).
-Non-org chats are one-shot: there are no role-switching turns to
-reconstruct.  The extractor takes everything from buffer-start (or the
-last response marker, if one exists) up to point as a single
-=(:role 'user :content STRING)= plist, plus the configured system
-message as =(:role 'system …)=.  Returns the same canonical plist list
-the org walker produces and feeds the same =gptel--format-messages=
-backend dispatch — no streaming, no tool-call wiring, no text-property
-tagging.
-
 **** AI-DO Use TODO-state vocabulary for tool calls (no property drawers)
 Each tool call gets its own heading whose TODO keyword is the tool
 name drawn from the =SEQ_TODO= tool vocabulary (=BASH=, =EVAL=, =GLOB=,
@@ -396,6 +385,8 @@ properties, they create the heading with the appropriate "-ING" state
 "-ED" state when the result lands.  The result body is inserted under
 the heading.
 
+***** FEEDBACK The result body for delegated agent tool should not be fenced to begin_tool as it is expected to be org formatted respond
+- Other tools such as bash should be fenced to avoid corrupting org formatting
 ***** Decision: tool-call correlation IDs — use =org-id= with API id as value
 Anthropic/Bedrock require pairing =tool_use= ↔ =tool_result= by ID.
 
@@ -484,10 +475,223 @@ Same idea: =REASONED= heading body holds reasoning text; walker emits
 =(:role 'reasoning …)= only when =gptel-include-reasoning= is non-nil
 and not ='ignore=.  Drop ='gptel 'ignore= text property usage for org.
 
-**** AI-DO Restructure =gptel-org-branching-context= to lineage walker
+**** AI-DONE Restructure =gptel-org-branching-context= to lineage walker
 Replace textual ancestor-region concatenation with structural lineage
 walk: enumerate ancestor headings via =org-element-lineage-map=, emit
 messages per heading.  No virtual concatenation.
+
+***** Origin
+- Current implementation: =gptel-org--create-prompt-buffer=
+  (=gptel-org.el:226-289=) collects ancestor headline =:begin=
+  positions via =gptel-org--element-lineage-map=, then concatenates
+  raw buffer text of each ancestor's region into a synthetic buffer
+  via =gptel--with-buffer-copy=.  That synthetic buffer is then
+  parsed by the backend-specific =gptel--parse-buffer= primary
+  method (text-property walk).
+- Sibling siro walker (=siro-gptel-parse.el:28=) already intercepts
+  =gptel--parse-buffer= via =:around= and emits canonical plists,
+  but *only* when inside an =AI-DO= subtree.  Outside an AI-DO, the
+  intercept falls through to =cl-call-next-method= and the upstream
+  buffer-copy machinery runs.
+- Only one caller of =gptel-org--create-prompt-buffer= exists:
+  =gptel-request.el:2363= (inside =derived-mode-p 'org-mode=).
+- Per parent Mission: changes live in =siro-orga= where possible;
+  touch =~/gptel/= only when unavoidable.
+
+***** Discussion highlights
+- "Lineage walker" = structural ancestor traversal that emits *one
+  canonical message plist per ancestor heading*, no buffer-copy.
+- Branching-context is a user-facing /upstream/ feature, but its
+  /implementation/ becomes a siro responsibility (same pattern as
+  the AI-DO walker).  Upstream =gptel-org--create-prompt-buffer=
+  branching branch becomes dead code, removed by sibling cleanup
+  TODO.
+- The lineage walker should reuse the existing canonical-plist
+  helpers in =siro-gptel-headings.el= (=--classify=,
+  =--section-body=, =--canonical-tool-message=,
+  =--reasoning-keyword-p=, etc.) — not duplicate them.
+- Ancestor ordering: outermost ancestor first, current heading
+  last; same order as today's textual concatenation.
+- Each ancestor heading contributes:
+  - Its TODO-keyword classification (user / assistant / tool-call
+    / tool-result / reasoning).
+  - Its *section body* only (text between this heading and its
+    first child heading) — siblings of ancestors are *not*
+    included (this matches the branching-context "only this branch"
+    semantics).
+- Top-of-buffer prefix text (before any heading) becomes a leading
+  =user= message when present, mirroring the seed-message behavior
+  in =siro-gptel-headings--seed-user-message=.
+
+***** Decisions
+1. *Hook location:* Extend the existing =:around= method on
+   =gptel--parse-buffer= in =siro-gptel-parse.el=.  When the buffer
+   is org-mode and there is no enclosing AI-DO subtree but
+   =gptel-org-branching-context= is non-nil, run the new lineage
+   walker and return its canonical-plist output via
+   =siro-gptel-format-messages=.  Otherwise fall through to
+   =cl-call-next-method= as today.
+2. *Walker implementation:* Add
+   =siro-gptel-headings-walk-lineage--canonical= to
+   =siro-gptel-headings.el=.  Uses =org-element-lineage-map= with
+   ='with-self= on =(org-element-at-point)= to collect ancestor
+   headlines (outermost-first), then emits canonical plists by
+   reusing existing classification/body/tool-message helpers.
+3. *Buffer-copy bypass:* The new path never calls
+   =gptel-org--create-prompt-buffer= and never produces a synthetic
+   buffer.  =gptel-request.el='s call to that function still exists
+   but is unreachable when our =:around= handles the request — and
+   will be deleted entirely by the sibling cleanup TODO.
+4. *No changes to upstream =gptel-org.el=.*  The variable
+   =gptel-org-branching-context= remains as-is (defcustom +
+   docstring); only its /implementation path/ changes, from a siro
+   intercept.
+5. *Topic narrowing:* Respect =gptel-org--get-topic-start= the same
+   way the current implementation does — drop ancestors whose
+   =:begin= is before topic-start.
+6. *Region active:* If region is active, fall back to
+   =cl-call-next-method= (region semantics already work with the
+   linear extractor; no need to lineage-walk a region).
+
+***** Mission
+Move the implementation of =gptel-org-branching-context= from
+upstream textual buffer-copy concatenation to a siro structural
+lineage walker that emits canonical message plists, reusing the
+existing siro headings infrastructure.  No changes to user-facing
+behavior of =gptel-org-branching-context=; only its internals.
+
+***** TODOs
+****** AI-DONE Add =siro-gptel-headings-walk-lineage--canonical=
+- New function in =siro-gptel-headings.el=.
+- Signature: =(siro-gptel-headings-walk-lineage--canonical &optional point)=
+  — defaults =point= to =(point)=.
+- Returns a list of canonical message plists (per the schema in
+  =siro-gptel-messages.el=).
+- Implementation outline:
+  1. Save excursion; goto =point=.
+  2. Compute ancestor headlines via =org-element-lineage-map= with
+     types =(headline)=, =with-self=.  Result is closest-first;
+     =nreverse= to get outermost-first.
+  3. Honor =gptel-org--get-topic-start=: drop ancestors whose
+     headline begin is before topic-start.
+  4. If the buffer has prefix text before the outermost ancestor's
+     =:begin= (top-of-buffer text), emit it as a leading =user=
+     message — reuse / mirror =--seed-user-message=.
+  5. For each ancestor headline, in order:
+     - Classify via =--classify= (user / assistant) or detect
+       reasoning / tool keywords via =--reasoning-keyword-p= /
+       =--inline-keyword-p=.
+     - Emit the appropriate canonical plist using
+       =--section-body= and =--canonical-tool-message=, same as
+       =walk-conversation--canonical=.
+  6. Return the list.
+- Unit tests in =test/siro-gptel-headings-test.el= (or a new
+  =siro-gptel-headings-lineage-test.el=) covering:
+  - Nested headings: only ancestors emitted, siblings dropped.
+  - Top-level prefix text → leading user message.
+  - Topic-start narrowing.
+  - Mixed role keywords on ancestors.
+
+****** AI-DONE Wire lineage walker into =:around= dispatcher
+- Modify =siro-gptel-parse.el='s =:around= method.
+- New flow:
+  1. If buffer not org-mode → =cl-call-next-method=.
+  2. If region active → =cl-call-next-method=.
+  3. If inside AI-DO subtree → existing AI-DO walker path.
+  4. Else if =gptel-org-branching-context= is non-nil → call
+     =siro-gptel-headings-walk-lineage--canonical= and route
+     through =siro-gptel-format-messages=.
+  5. Else → =cl-call-next-method=.
+- Unit + e2e tests in =test/=:
+  - Branching-context on, no AI-DO → lineage walker output.
+  - Branching-context off → upstream path unchanged.
+  - Branching-context on, inside AI-DO → AI-DO walker wins
+    (precedence test).
+
+***** Outcomes / Results
+
+Landed on branch =feature/gptel-headings-phase1= in =~/siro-orga= as
+commit =52990c6= ("siro-gptel: add lineage walker for
+branching-context").
+
+****** Files changed
+- =siro-gptel-headings.el=:
+  - Added =(require 'gptel-org)= for
+    =gptel-org--element-lineage-map= and
+    =gptel-org--get-topic-start=.
+  - New public function
+    =siro-gptel-headings-walk-lineage--canonical (&optional point)=
+    that walks ancestor headlines outermost-first and emits one
+    canonical message plist per ancestor.
+  - New private helpers:
+    - =siro-gptel-headings--classify-lineage= — keyword→role map
+      tailored to the no-AI-DO-container lineage path
+      (FEEDBACK→user, REASONING/REASONED→reasoning, tool→nil so
+      the tool-message helper takes over, AI-DO*→assistant, else
+      user).
+    - =siro-gptel-headings--lineage-section-body= — reads section
+      body straight from the buffer between =:contents-begin= and
+      the next child heading (the existing =--section-body=
+      requires a fully-parsed headline, but lineage headlines
+      come from =org-element-at-point= and have no parsed
+      =org-element-contents=).  Skips a leading =:PROPERTIES:=
+      drawer when present so topic-marked ancestors emit the
+      prose below their drawer, not the drawer itself.
+    - =siro-gptel-headings--lineage-prefix-message= — emits a
+      leading =user= message for prose between (topic-start or
+      =point-min=) and the outermost ancestor's =:begin=.  When
+      there are no headline ancestors, the prefix runs up to
+      =(point)=, so a prose-only buffer yields exactly one user
+      message.
+    - =siro-gptel-headings--lineage-tool-message= — tool-call /
+      tool-result emitter that uses the lineage section-body
+      reader.
+    - =siro-gptel-headings--lineage-emit-headline= — per-headline
+      dispatcher.
+- =siro-gptel-parse.el=:
+  - Added =(require 'gptel-org)=.
+  - Rewrote the =:around= method to a =cond= dispatcher:
+    non-org/region→next-method, AI-DO→AI-DO walker, branching-context→lineage
+    walker, else→next-method.
+  - Expanded the Commentary docstring to describe both walker
+    paths.
+- =test/siro-gptel-headings-lineage-test.el= (new): 5 ERT tests
+  covering ancestors-only/siblings-dropped, top-level prefix,
+  topic-start narrowing, mixed-role keywords (FEEDBACK ancestor),
+  and the no-ancestors prose-only case.
+- =test/Makefile=: added the new test file to the =-l= list.
+
+****** Test count
+Before: 44/44 passing.  After: 49/49 passing (5 new lineage tests,
+all green on first full green run).
+
+****** Issues encountered / decisions outside spec
+- =org-element-at-point= returns a cheap (non-recursive) element
+  whose ancestor headlines do *not* have =org-element-contents=
+  populated.  The existing =--section-body= helper relies on
+  =org-element-contents= and therefore returns =nil= for lineage
+  headlines.  Resolved by adding
+  =siro-gptel-headings--lineage-section-body=, which reads the
+  body region directly from the buffer between =:contents-begin=
+  and the next =^\*+ = match (or =:contents-end=).  This keeps
+  the existing helper untouched so the AI-DO walker semantics are
+  unchanged.
+- The lineage section-body reader skips a leading
+  =:PROPERTIES:...:END:= drawer.  This was needed for the
+  topic-start test: when an ancestor is the topic-anchor, its
+  =GPTEL_TOPIC= drawer would otherwise leak into the emitted
+  message body.  Drawer-skipping is conservative (only the first
+  drawer, only when it appears at the very start of the section).
+- The spec mentioned possibly extracting a
+  =--classify-lineage= helper "for testability and reuse".  Done:
+  it is a small =cond= that maps a TODO keyword to a role symbol,
+  with tool keywords intentionally returning =nil= so the
+  tool-message helper takes over.
+- No changes to upstream =gptel-org.el= or
+  =gptel-org--create-prompt-buffer=.  The buffer-copy machinery
+  in upstream is now unreachable when the siro =:around= handles
+  org buffers with =gptel-org-branching-context= enabled, ready
+  for the sibling Cleanup TODO.
 
 **** AI-DO Cleanup: remove upstream buffer-copy code (unconditional)
 Once all of the above lands and is stable, delete the buffer-copy
@@ -584,6 +788,19 @@ Acceptance: =FEEDBACK Should all AI discussion responses have org-id=
 is resolved with a recorded decision; if option 2 or 3 is chosen, a
 follow-up sub-AI-DO is filed to wire =:ID:= insertion into the
 IB-producer hooks in =~/siro-orga/siro-gptel-hooks.el=.
+
+***** FEEDBACK Option 1 is ok for now
+
+**** AI-DO Non-org one-shot extractor
+Trivial helper for non-org buffers (markdown, text, code modes).
+Non-org chats are one-shot: there are no role-switching turns to
+reconstruct.  The extractor takes everything from buffer-start (or the
+last response marker, if one exists) up to point as a single
+=(:role 'user :content STRING)= plist, plus the configured system
+message as =(:role 'system …)=.  Returns the same canonical plist list
+the org walker produces and feeds the same =gptel--format-messages=
+backend dispatch — no streaming, no tool-call wiring, no text-property
+tagging.
 
 *** Out of scope
 - Streaming insertion mechanics (=gptel-curl--stream-insert-response=):
