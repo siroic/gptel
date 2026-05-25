@@ -137,7 +137,8 @@ Resolved: see =*** Decisions=.
   =WRITE=, =EDIT=, =INSERT=, =GATHERED=, =RESEARCHED=, =EXECUTED=,
   =IMPLEMENTED=, =INTROSPECTED=, …).  The heading title is the call
   summary.  No =:GPTEL_TOOL_ID:= / =:GPTEL_TOOL_NAME:= drawers.
-  Correlation-ID strategy is an open question; see the relevant AI-DO.
+  Correlation IDs use org's standard =:ID:= property with the API's
+  wire id as its value (see the Decision sub-heading in this AI-DO).
 
 *** Mission
 Replace the =buffer-copy → strip → text-property walk= pipeline
@@ -273,16 +274,67 @@ properties, they create the heading with the appropriate "-ING" state
 "-ED" state when the result lands.  The result body is inserted under
 the heading.
 
-***** Open question: tool-call correlation IDs
+***** Decision: tool-call correlation IDs — use =org-id= with API id as value
 Anthropic/Bedrock require pairing =tool_use= ↔ =tool_result= by ID.
-Pick one before promoting this AI-DO:
-- (a) Synthesize IDs at wire-format time from heading position + state
-  vocabulary; never persist.  Order-based pairing within the parent
-  AI-DO subtree.
-- (b) Keep a single =:ID:= property only on tool-call headings that
-  have an outstanding result; drop it once paired.
-- (c) Use org's built-in =:ID:= (=org-id=) — already a standard org
-  property — when persistence across saves is needed.
+
+Decision: option (c) + use the API's wire id directly as the value of
+the standard org =:ID:= property.
+
+Rationale:
+- org-id accepts any non-blank, no-space string as =:ID:= value —
+  =toolu_01abc=, =call_xyz= are valid; no UUID synthesis needed.
+- Single source of truth: the wire id IS the org handle.  No
+  translation table between an internal UUID and the API id.
+- Cross-session restart works out of the box: =(org-id-find
+  "toolu_01abc")= resolves directly to the heading after Emacs
+  restart, via lazy load of =~/.emacs.d/.org-id-locations=.
+- API providers guarantee per-conversation uniqueness of their IDs,
+  satisfying org-id's non-collision requirement.
+- Rejects (a): order-based pairing breaks if the user reorders or
+  edits tool-call headings between requests; also fails to survive
+  restart.
+- Rejects (b): dropping =:ID:= after pairing causes stale entries in
+  =org-id-locations=, forcing expensive full-rescans on later
+  lookups; also loses audit/replay value.
+
+Property drawer schema (one property only):
+#+begin_src org
+  ,*** BASH Get dir content
+  :PROPERTIES:
+  :ID:   toolu_01XzYabc123
+  :END:
+  ,#+begin_src bash
+  ls -la .
+  ,#+end_src
+#+end_src
+
+Lifecycle:
+- ID is written at heading creation (pre-tool hook), *before* tool
+  execution begins:
+  : (org-entry-put nil "ID" api-id)
+  : (org-id-add-location api-id (buffer-file-name))
+  : (org-id-locations-save)   ; eager persist; don't wait for kill-emacs
+- =:ID:= is never dropped — it stays with the heading permanently.
+  The TODO state (-ING vs -ED) encodes completion; =:ID:= encodes
+  wire identity.
+- On restart: walker scans the conversation subtree for tool-call
+  headings still in -ING state (BASH, EVAL, …) without a paired
+  result; reads their =:ID:=; re-executes or marks FAILED per
+  idempotency policy (TBD — separate decision).
+
+Dependencies / preconditions:
+- =org-id-track-globally= must be non-nil (default t).
+- Conversation files need not be in =org-agenda-files= as long as
+  =(org-id-locations-save)= is called eagerly on each ID creation
+  (covers the crash-before-=kill-emacs-hook= window).
+
+Pitfalls:
+- Hard Emacs crash before any =org-id-locations-save= → ID may not
+  be in =.org-id-locations=, but fallback =org-id-update-id-locations=
+  rescan rediscovers it if the file is reachable.  Mitigated by
+  eager save above.
+- Multi-provider conversations: Anthropic and OpenAI namespaces are
+  disjoint (=toolu_…= vs =call_…=); no collision risk in practice.
 
 ***** FEEDBACK Each tool have own state, why we need properties
 #+begin_src org
