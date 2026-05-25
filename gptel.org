@@ -340,7 +340,7 @@ described the old "synthesize transient buffer" mechanism.  Both were
 refreshed in the same commit to describe the current canonical+formatter
 =:around= behavior.
 
-**** AI-DO Use TODO-state vocabulary for tool calls (no property drawers)
+**** AI-DONE Use TODO-state vocabulary for tool calls (no property drawers)
 Each tool call gets its own heading whose TODO keyword is the tool
 name drawn from the =SEQ_TODO= tool vocabulary (=BASH=, =EVAL=, =GLOB=,
 =GREP=, =READ=, =WRITE=, =EDIT=, =INSERT=, =GATHER=/=GATHERING=/=GATHERED=,
@@ -384,6 +384,62 @@ properties, they create the heading with the appropriate "-ING" state
 (or call-name state) on entry and transition it to the corresponding
 "-ED" state when the result lands.  The result body is inserted under
 the heading.
+
+***** Outcomes
+Implemented in =~/siro-orga= on branch =feature/gptel-headings-phase1=,
+plus one upstream change in =~/gptel/=.
+
+- =gptel.el= (upstream, this fork) — =gptel--handle-pre-tool= and
+  =gptel--handle-post-tool= now pass =:id= (the backend wire id:
+  =toolu_*=, =call_*=, or generated UUID) through to
+  =gptel-pre-tool-call-functions= / =gptel-post-tool-call-functions=
+  hook plists.  Purely additive — no existing consumer reads it.
+- =siro-gptel-headings.el= — new helper =--headline-id= reads the
+  =:ID:= property drawer entry on a headline.  =--canonical-tool-message=
+  and =--lineage-tool-message= now append =:id ID= to emitted tool-call
+  / tool-result plists when the underlying heading carries an =:ID:=.
+  The walker docstring's "Emission contract" loses its Phase 1 =:id=
+  deferral bullet and documents the new propagation.
+- =siro-gptel-hooks.el= — new helpers =--write-tool-id= (writes the
+  =:ID:= property and registers with =org-id-locations=) and
+  =--insert-tool-result= (conditional fencing).  =--pre-tool-call=
+  reads =:id= from the plist and writes it on the new tool segment.
+  =--post-tool-call= now derives =fence-p = (null end-kw)=: sub-agent
+  (Agent dispatch) results — identified by a non-nil
+  =--segment-end-keyword= like ="GATHERED"= — are inserted *verbatim*
+  because their bodies are already org-formatted; all other tool
+  results (BASH, EVAL, READ, …) remain wrapped in
+  =#+begin_example= to protect surrounding org syntax.
+- Tests: 5 new walker unit tests (3 conversation walker + 2 lineage
+  walker) covering positive and negative =:id= propagation; 4 new e2e
+  hook tests (=:ID:= property writing, BASH fencing, Agent un-fencing,
+  =org-id-find= round-trip).  *58/58 tests passing.*
+
+FEEDBACK items resolved:
+- "Result body for delegated agent tool should not be fenced" →
+  resolved by the conditional fencing in =--post-tool-call=.
+- "Each tool has own state, why we need properties" → resolved by
+  the Decision (=:ID:= via org-id only, not arbitrary property
+  drawers; one drawer entry per tool segment).
+- Decision to use =org-id= with the API id as value → implemented
+  exactly as specified, including =org-id-locations-save= so
+  =org-id-find= round-trips.
+
+Deferred (still open):
+- "Should all AI discussion responses have org-id" — out of scope
+  for this pass; non-tool segments (RESPONDED, REASONED, FEEDBACK)
+  remain without =:ID:=.  Tracked by the separate AI-DO "Decide
+  =:ID:= policy for non-tool segments" (line ~750 of this doc).
+- Per-backend wire-format reshaping to use structured tool_use /
+  tool_result blocks (anthropic/openai) — the canonical =:id= is
+  now carried through and persisted, but the formatter still emits
+  the legacy fenced-text wire format.  Tracked by a follow-up
+  AI-DO (not yet listed).
+
+Result: heading-state parser now carries tool-call correlation IDs
+end-to-end (wire → hook → heading property → walker → canonical
+plist) without affecting prior reasoning storage, response storage,
+or the buffer-copy cleanup work.
 
 ***** FEEDBACK The result body for delegated agent tool should not be fenced to begin_tool as it is expected to be org formatted respond
 - Other tools such as bash should be fenced to avoid corrupting org formatting
