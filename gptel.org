@@ -1,3 +1,4 @@
+#+SEQ_TODO: GLOB READ INSERT EDIT WRITE GREP EVAL BASH GATHER GATHERING GATHERED EXECUTE EXECUTING EXECUTED RESEARCH RESEARCHING RESEARCHED DEEP-RESEARCH DEEP-RESEARCHING DEEP-RESEARCHED IMPLEMENT IMPLEMENTING IMPLEMENTED INTROSPECT INTROSPECTING INTROSPECTED TODO(t) AI-DO(a) AI-DOING(i) DOING FEEDBACK(f) DENIED(d@) PENDING(p) ALLOWED(A)  AI_FEEDBACK RESPOND RESPONDING REASON REASONING | AI-DONE(d) DONE(D) ARCHIVED(r) CANCELED(c) RESPONDED REASONED
 * MUST READ
 * Future plans
 * TODOs
@@ -76,3 +77,278 @@ Reference legacy implementation: =~/.emacs.d/quelpa/build/gptel/gptel-org.el::10
 - Tool-category =@catname= expansion in =GPTEL_TOOLS=.
 
 These can be filed as sibling TODOs if needed.
+** AI-DO Replace buffer-copy prompt pipeline with heading-state parser (org-mode)
+*** Origin
+Raised in =~/siro-orga/siro-orga.ws.org= discussion: the upstream
+=gptel--with-buffer-copy-internal= + =gptel-org--create-prompt-buffer=
++ backend =gptel--parse-buffer= chain feels overcomplicated for the
+orga workflow.  The TODO-keyword set (=AI-DO=, =RESPONDING=, =RESPONDED=,
+=FEEDBACK=, =REASONED= …) already encodes role boundaries; the
+text-property contract (=gptel 'response=, =(tool . id)=, ='ignore=) is
+legacy from the pre-org-centric design.
+
+Deep-research analysis (see discussion thread) confirmed:
+- =~/siro-orga/siro-gptel-parse.el= already implements a heading-state
+  walker as an =:around= method on =gptel--parse-buffer=.
+- =GPTEL_BOUNDS= persistence is already removed (see comments at
+  =gptel-org.el::598= and =::695=).
+- The siro walker currently *re-serializes* its messages into a
+  synthetic buffer with =gptel 'response= text properties just to feed
+  =cl-call-next-method= — wasted round-trip.
+- The buffer-copy machinery's three textual transforms
+  (=gptel-org--unescape-tool-results=, =gptel-org--strip-block-headers=,
+  =gptel-org--strip-elements=) only exist because tool results /
+  reasoning are roundtripped through textual fences.  With structural
+  storage (property drawers / org-element values) they disappear.
+
+*** Discussion highlights
+- Non-org buffers (markdown/text/code) are one-shot AI queries: there
+  is no multi-turn role structure to reconstruct, so all the text
+  above point is simply the user message.  Buffer-copy / strip / text-
+  property tagging is overkill there too.  Drop buffer-copy entirely;
+  the org path uses a heading-state walker, the non-org path uses a
+  trivial "text above point → single user message" extractor.
+- Tool-call ID correlation (Anthropic / Bedrock) must be preserved.
+  The TODO-state vocabulary already encodes the tool name on each
+  call heading (=BASH=, =EVAL=, =GATHERED=, =RESEARCHED= …); ID strategy
+  is a separate open question (see the tool-call AI-DO).
+- =gptel-include-reasoning 'ignore= becomes: keep =REASONED= heading
+  visible, walker skips it.  No ='ignore= property needed.
+- Streaming insertion is mode-agnostic (marker-based); no upstream
+  change needed — only the post-insertion text-property tagging goes
+  away.
+- =gptel-org-branching-context= becomes structural: walk ancestor
+  headings, emit messages directly, no text concatenation.
+
+**** FEEDBACK The non-org style is basically text/code, which should not need discussion rounds to remember
+- They use one-shot AI query without need for feedback (user text etc)
+- Also it simply take all text above pointer to be user context text
+- So, there should not be need for keeping the buffer-copy style at all
+
+Resolved: see =*** Decisions=.
+
+*** Decisions
+- Non-org buffers also drop buffer-copy.  Their extractor is a
+  one-shot "text above point → single user message" helper; no text-
+  property tagging, no strip pipeline.  Both paths converge on the
+  canonical plist schema and feed the same =gptel--format-messages=.
+- Tool-call state is encoded by the heading's TODO keyword (the
+  =SEQ_TODO= tool vocabulary: =BASH=, =EVAL=, =GLOB=, =GREP=, =READ=,
+  =WRITE=, =EDIT=, =INSERT=, =GATHERED=, =RESEARCHED=, =EXECUTED=,
+  =IMPLEMENTED=, =INTROSPECTED=, …).  The heading title is the call
+  summary.  No =:GPTEL_TOOL_ID:= / =:GPTEL_TOOL_NAME:= drawers.
+  Correlation-ID strategy is an open question; see the relevant AI-DO.
+
+*** Mission
+Replace the =buffer-copy → strip → text-property walk= pipeline
+entirely.  Two extractors feed one canonical plist schema:
+- Org buffers: =org-element + TODO-state walker → canonical message
+  plists=.
+- Non-org buffers: trivial "text above point → single user message"
+  extractor → canonical message plists.
+Both then flow through the same =gptel--format-messages= backend wire
+formatter.  No buffer-copy, no text-property tagging on either path.
+All changes should live in siro-orga where possible; touch =~/gptel/=
+only when unavoidable.
+
+*** TODOs
+**** AI-DO Validation experiment: parallel pipeline comparator
+Smallest reversible probe.  Zero production code paths touched.
+
+1. Write =siro-gptel-parse--canonical-messages= returning a list of
+   canonical plists:
+   #+begin_src elisp
+     (:role 'user|'assistant|'system|'tool-call|'tool-result|'reasoning
+      :content STRING|MEDIA-PARTS
+      :id     STRING        ;; tool-call/tool-result correlation
+      :name   STRING        ;; tool-call function name
+      :args   ALIST/PLIST   ;; tool-call args
+      :result STRING)       ;; tool-result body
+   #+end_src
+   Note: =:id= sourcing depends on the correlation-ID resolution in
+   the tool-call AI-DO below (synthesized vs persisted vs org-id).
+   Extend =siro-gptel-headings-walk-conversation= to emit tool/reasoning
+   as first-class messages instead of inlining fences.
+
+2. Write =siro-gptel-parse--format-openai= that converts that list to
+   the same JSON shape =gptel-openai='s =gptel--parse-buffer= produces.
+
+3. In a test, run both pipelines side-by-side on the same AI-DO subtree
+   and =should-equal= the resulting JSON.  Fixture must include at
+   least one tool call and one reasoning block.
+
+Success criterion: byte-equal JSON for a representative AI-DO subtree.
+If diffs appear, they reveal corner cases the buffer-copy pipeline is
+implicitly handling — capture each as a sub-TODO.
+
+**** AI-DO Define and document the canonical message plist schema
+Document the schema in =siro-gptel-parse.el= (or new
+=siro-gptel-messages.el=) with docstring + ert fixtures.  Zero behavior
+change; this is the contract that subsequent TODOs depend on.
+
+Note: the =:id= field's sourcing strategy is deferred to the tool-call
+AI-DO below; the schema reserves the slot regardless.
+
+**** AI-DO Per-backend canonical→wire formatters
+Add =gptel--format-messages= generic + methods for each backend:
+- =gptel-openai= (OpenAI Chat Completions)
+- =gptel-openai-responses=
+- =gptel-anthropic=
+- =gptel-bedrock=
+- =gptel-gemini=
+- =gptel-ollama=
+
+Each formatter consumes canonical plists, emits the wire shape that
+backend's =gptel--parse-buffer= produces today.  Each is ~30 lines.
+Cover with tests against fixtures.
+
+Note: Anthropic and Bedrock formatters need to synthesize/consume
+tool-call IDs per whichever correlation-ID option is chosen in the
+tool-call AI-DO below.
+
+**** AI-DO Switch siro =:around= method to bypass synthetic buffer
+Once validators pass for all backends, change =siro-gptel-parse.el='s
+=:around= method to:
+1. Build canonical messages directly via heading walker.
+2. Call =gptel--format-messages= on the backend.
+3. Return the wire-format messages directly — do not call
+   =cl-call-next-method=, do not synthesize a buffer.
+
+Delete =siro-gptel-parse--insert-messages= and
+=siro-gptel-parse--with-synthetic-buffer= after.
+
+**** AI-DO Non-org one-shot extractor
+Trivial helper for non-org buffers (markdown, text, code modes).
+Non-org chats are one-shot: there are no role-switching turns to
+reconstruct.  The extractor takes everything from buffer-start (or the
+last response marker, if one exists) up to point as a single
+=(:role 'user :content STRING)= plist, plus the configured system
+message as =(:role 'system …)=.  Returns the same canonical plist list
+the org walker produces and feeds the same =gptel--format-messages=
+backend dispatch — no streaming, no tool-call wiring, no text-property
+tagging.
+
+**** AI-DO Use TODO-state vocabulary for tool calls (no property drawers)
+Each tool call gets its own heading whose TODO keyword is the tool
+name drawn from the =SEQ_TODO= tool vocabulary (=BASH=, =EVAL=, =GLOB=,
+=GREP=, =READ=, =WRITE=, =EDIT=, =INSERT=, =GATHER=/=GATHERING=/=GATHERED=,
+=RESEARCH=/=RESEARCHING=/=RESEARCHED=, =EXECUTE=/=EXECUTING=/=EXECUTED=,
+=IMPLEMENT=/=IMPLEMENTING=/=IMPLEMENTED=, =INTROSPECT=/=…ED=, etc.).
+The state encodes /which tool/; the heading title encodes the call
+summary.  Example:
+#+begin_src org
+  ,* TODO Something
+  ,** AI-DO Something
+  ,*** BASH Get dir content
+  ,#+begin_src bash
+    ls -la .
+  ,#+end_src
+  ls -la output …
+  ,*** EVAL Checking some emacs variable
+  ,*** GATHERED Something
+  ,*** RESEARCHED Something
+  ,**** GATHERED Something
+#+end_src
+
+Storage shape:
+- Args live in a fenced =#+begin_src= block (or =#+begin_tool= if we
+  keep that marker) directly under the heading.
+- Result body lives either inline under the same heading (after the
+  args block) or as a child heading whose state is the "-ED" variant
+  (=GATHERING= → =GATHERED=, =EXECUTING= → =EXECUTED=, …).  The
+  lifecycle hooks transition the state on completion.
+- No =:GPTEL_TOOL_ID:= / =:GPTEL_TOOL_NAME:= property drawers.  The
+  TODO keyword is the name; the heading position is the identity.
+
+Walker behavior:
+- Reads the heading's TODO state, classifies it as a tool-call /
+  tool-result via the =SEQ_TODO= vocabulary, and emits
+  =(:role 'tool-call :name <state-as-symbol> :args …)= and
+  =(:role 'tool-result :content …)= plists.
+
+Hook changes (=siro-gptel-hooks--pre-tool-call= /
+=--post-tool-call=): instead of writing property drawers or text
+properties, they create the heading with the appropriate "-ING" state
+(or call-name state) on entry and transition it to the corresponding
+"-ED" state when the result lands.  The result body is inserted under
+the heading.
+
+***** Open question: tool-call correlation IDs
+Anthropic/Bedrock require pairing =tool_use= ↔ =tool_result= by ID.
+Pick one before promoting this AI-DO:
+- (a) Synthesize IDs at wire-format time from heading position + state
+  vocabulary; never persist.  Order-based pairing within the parent
+  AI-DO subtree.
+- (b) Keep a single =:ID:= property only on tool-call headings that
+  have an outstanding result; drop it once paired.
+- (c) Use org's built-in =:ID:= (=org-id=) — already a standard org
+  property — when persistence across saves is needed.
+
+***** FEEDBACK Each tool have own state, why we need properties
+#+begin_src org
+  ,* TODO Something
+  ,** AI-DO Something
+  ,*** BASH Get dir content
+  ,#+begin_tool
+  ls -la .
+
+  ...
+  ,#+end_tool
+  ,*** EVAL Checking some emacs variable
+  ,*** GATHERED Something
+  ,*** RESEARCHED Something
+  ,**** GATHERED Something
+#+end_src
+
+Resolved: see body above and =*** Decisions=.
+
+**** AI-DO Move reasoning storage to plain =REASONED= headings
+Same idea: =REASONED= heading body holds reasoning text; walker emits
+=(:role 'reasoning …)= only when =gptel-include-reasoning= is non-nil
+and not ='ignore=.  Drop ='gptel 'ignore= text property usage for org.
+
+**** AI-DO Restructure =gptel-org-branching-context= to lineage walker
+Replace textual ancestor-region concatenation with structural lineage
+walk: enumerate ancestor headings via =org-element-lineage-map=, emit
+messages per heading.  No virtual concatenation.
+
+**** AI-DO Cleanup: remove upstream buffer-copy code (unconditional)
+Once all of the above lands and is stable, delete the buffer-copy
+machinery outright — both paths (org walker, non-org one-shot
+extractor) bypass it entirely, so no caller remains:
+- =gptel--with-buffer-copy-internal=
+- =gptel-org--create-prompt-buffer=
+- =gptel-org--strip-block-headers=
+- =gptel-org--unescape-tool-results=
+- =gptel-org--strip-elements=
+
+No compat shim, no fallback toggle (project rule: "if new feature
+replaces old one, no toggle, no compat layer").
+
+This is a fork-divergence decision — explicit user approval required
+before deleting any upstream function.
+
+*** Out of scope
+- Streaming insertion mechanics (=gptel-curl--stream-insert-response=):
+  unchanged; only the post-insertion tagging goes away.
+- Persistence format changes: GPTEL_BOUNDS is already removed; heading
+  structure /is/ the persistence.
+
+*** Key file references
+| Concern                              | File:Line                        |
+|--------------------------------------+----------------------------------|
+| =gptel--with-buffer-copy-internal=   | =gptel-request.el::1063=         |
+| =gptel-org--create-prompt-buffer=    | =gptel-org.el::226=              |
+| =gptel-org--unescape-tool-results=   | =gptel-org.el::352=              |
+| =gptel-org--strip-block-headers=     | =gptel-org.el::337=              |
+| =gptel-org--strip-elements=          | =gptel-org.el::310=              |
+| Branching context                    | =gptel-org.el::113=, =::241=     |
+| GPTEL_BOUNDS removal markers         | =gptel-org.el::598=, =::695=     |
+| OpenAI parse-buffer                  | =gptel-openai.el::365=           |
+| Anthropic parse-buffer               | =gptel-anthropic.el::429=        |
+| Bedrock parse-buffer                 | =gptel-bedrock.el::391=          |
+| siro =:around= method                | =siro-gptel-parse.el::66=        |
+| Walker                               | =siro-gptel-headings.el::262=    |
+| TODO-state classifier                | =siro-gptel-headings.el::206=    |
+| AI-DO bounds detection               | =siro-gptel-headings.el::144=    |
+| Lifecycle hooks                      | =siro-gptel-hooks.el::206=       |
