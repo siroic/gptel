@@ -263,6 +263,36 @@ to the LLM, and after a text insertion."
   :type 'hook
   :group 'gptel)
 
+(defcustom gptel-pre-reasoning-hook nil
+  "Hook run before the first reasoning chunk is inserted.
+
+This hook is called in the response buffer with point at the
+reasoning insertion location, just before the opening reasoning
+fence (e.g. `#+begin_reasoning') is inserted.  Each function
+takes no arguments.
+
+The hook only runs when reasoning content is being inserted into
+the response buffer; it does not run when
+`gptel-include-reasoning' (or the request-level
+`:include-reasoning') is nil or names a separate buffer."
+  :type 'hook
+  :group 'gptel)
+
+(defcustom gptel-post-reasoning-hook nil
+  "Hook run after the last reasoning chunk has been inserted.
+
+The reasoning stream has ended and the closing reasoning fence
+(e.g. `#+end_reasoning') has been written, but no subsequent
+response content has been inserted yet.  Runs in the response
+buffer.  Each function takes no arguments.
+
+The hook only runs when reasoning content is being inserted into
+the response buffer; it does not run when
+`gptel-include-reasoning' (or the request-level
+`:include-reasoning') is nil or names a separate buffer."
+  :type 'hook
+  :group 'gptel)
+
 (defcustom gptel-pre-tool-call-functions nil
   "Abnormal hook called before each tool call.
 
@@ -1812,6 +1842,7 @@ Optional RAW disables text properties and transformation."
                                    (concat (propertize "\n```" 'gptel 'ignore
                                                        'keymap gptel--markdown-block-map)
                                            gptel-response-separator)))))
+               (run-hooks 'gptel-pre-reasoning-hook)
                (if (eq include 'ignore)
                    (progn
                      (add-text-properties
@@ -1821,6 +1852,7 @@ Optional RAW disables text properties and transformation."
                  (gptel--insert-response (concat separator (car blocks)) info t)
                  (gptel--insert-response text info)
                  (gptel--insert-response (cdr blocks) info t))
+               (run-hooks 'gptel-post-reasoning-hook)
                (save-excursion
                  (goto-char (plist-get info :tracking-marker))
                  (if (derived-mode-p 'org-mode) ;fold block
@@ -1971,9 +2003,11 @@ for streaming responses only."
                                (when (looking-at "^#\\+end_reasoning")
                                  (org-cycle)))
                       (when (re-search-backward "^```" start-marker t)
-                        (gptel-markdown-cycle-block))))))
+                        (gptel-markdown-cycle-block)))))
+                (run-hooks 'gptel-post-reasoning-hook))
             (unless (and reasoning-marker tracking-marker
                          (= reasoning-marker tracking-marker))
+              (run-hooks 'gptel-pre-reasoning-hook)
               (let ((separator        ;Separate from response prefix if required
                      (and (not tracking-marker) gptel-mode
                           (not (string-suffix-p
