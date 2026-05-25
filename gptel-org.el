@@ -55,8 +55,6 @@
 (declare-function gptel--parse-directive "gptel-request")
 (declare-function gptel--with-buffer-copy "gptel-request")
 (declare-function gptel--file-binary-p "gptel-request")
-(declare-function gptel--get-buffer-bounds "gptel")
-(declare-function gptel--restore-props "gptel")
 (declare-function org-entry-get "org")
 (declare-function org-entry-put "org")
 (declare-function org-with-wide-buffer "org-macs")
@@ -597,8 +595,8 @@ ARGS are the original function call arguments."
     (widen)
     (condition-case status
         (progn
-          (when-let* ((bounds (org-entry-get (point-min) "GPTEL_BOUNDS")))
-            (gptel--restore-props (read bounds)))
+          ;; GPTEL_BOUNDS persistence removed: response bounds are now
+          ;; recovered from heading structure by siro-gptel-parse.
           (pcase-let ((`(,preset ,system ,backend ,model ,temperature ,tokens ,num ,tools)
                        (gptel-org--entry-properties (point-min))))
             (when preset
@@ -694,19 +692,9 @@ send in queries.  (See `gptel--num-messages-to-send' for the last one.)"
    (when (org-at-heading-p)
      (org-open-line 1))
    (gptel-org-set-properties (point-min))
-   ;; Save response boundaries
-   (letrec ((write-bounds
-             (lambda (attempts)
-               (when-let* ((bounds (gptel--get-buffer-bounds))
-                           ;; first value of ((prop . ((beg end val)...))...)
-                           (offset (caadar bounds))
-                           (offset-marker (set-marker (make-marker) offset)))
-                 (org-entry-put (point-min) "GPTEL_BOUNDS"
-                                (prin1-to-string (gptel--get-buffer-bounds)))
-                 (when (and (not (= (marker-position offset-marker) offset))
-                            (> attempts 0))
-                   (funcall write-bounds (1- attempts)))))))
-     (funcall write-bounds 6))))
+   ;; GPTEL_BOUNDS persistence removed: response bounds are now recovered
+   ;; from heading structure by siro-gptel-parse on subsequent loads.
+   ))
 
 
 ;;; Transforming responses
