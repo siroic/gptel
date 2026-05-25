@@ -1532,9 +1532,10 @@ Perform UI updates and run post-response hooks."
                (dolist (tool-call tool-use)
                  (let* ((name (plist-get tool-call :name))
                         (args (plist-get tool-call :args))
+                        (id   (plist-get tool-call :id))
                         (hook-func-result
                          (with-demoted-errors "gptel-pre-tool-call hook error: %S"
-                           (funcall hook-func (nconc (list :name name :args args)
+                           (funcall hook-func (nconc (list :name name :args args :id id)
                                                      hook-func-args)))))
                    (if (plist-get hook-func-result :stop) ; Stop the request immediately
                        (let ((reason (or (plist-get hook-func-result :stop-reason)
@@ -1590,10 +1591,11 @@ Perform UI updates and run post-response hooks."
                (dolist (tool-call (plist-get info :tool-use))
                  (let* ((name (plist-get tool-call :name))
                         (args (plist-get tool-call :args))
+                        (id   (plist-get tool-call :id))
                         (hook-func-result
                          (with-demoted-errors "gptel-post-tool-call hook error: %S"
                            (funcall hook-func
-                                    (nconc (list :name name :args args
+                                    (nconc (list :name name :args args :id id
                                                  :result (plist-get tool-call :result))
                                            hook-func-args)))))
                    (if (plist-get hook-func-result :stop)
