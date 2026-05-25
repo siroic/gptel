@@ -297,7 +297,7 @@ tool-call AI-DO below.
   deferred to the tool-call AI-DO below, alongside the SEQ_TODO
   vocabulary change.
 
-**** AI-DO Switch siro =:around= method to bypass synthetic buffer
+**** AI-DONE Switch siro =:around= method to bypass synthetic buffer
 Once validators pass for all backends, change =siro-gptel-parse.el='s
 =:around= method to:
 1. Build canonical messages directly via heading walker.
@@ -307,6 +307,38 @@ Once validators pass for all backends, change =siro-gptel-parse.el='s
 
 Delete =siro-gptel-parse--insert-messages= and
 =siro-gptel-parse--with-synthetic-buffer= after.
+
+***** Outcomes (Phase 3)
+Implemented in =~/siro-orga= on branch
+=feature/gptel-headings-phase1=, commit =04711d8=
+("siro-gptel-parse: switch :around to canonical+formatter pipeline").
+
+- =siro-gptel-parse.el= rewritten: the =:around= method on
+  =gptel--parse-buffer= now builds canonical message plists directly via
+  =siro-gptel-headings-walk-conversation--canonical=, then dispatches
+  through =siro-gptel-format-messages= for the backend.  The wire format
+  is returned directly; =cl-call-next-method= is invoked only when point
+  is outside an AI-DO subtree (or the buffer is non-Org), preserving the
+  upstream code path for those cases.
+- The synthetic-buffer helpers =siro-gptel-parse--insert-messages= and
+  =siro-gptel-parse--with-synthetic-buffer= are deleted.  No other
+  call sites referenced them.
+- Test suite (=make -C test test=): 44/44 passing.  This includes all
+  24 comparator tests (six backends × four scenarios) which assert
+  =equal= output between the production =:around= path (Pipeline A) and
+  the explicit canonical+formatter sequence (Pipeline B).  Since both
+  pipelines now share the same underlying implementation the assertion
+  is effectively a regression guard against accidental re-introduction
+  of any synthetic-buffer dance.
+- The four backends-only Pipeline-A→B equality tests (OpenAI explicit
+  quartet, lines 110–175) and 20 generated quartet tests (anthropic,
+  bedrock, gemini, ollama, openai-responses) all pass byte-equal.
+***** Follow-up: stale comparator-test Commentary refreshed
+The Commentary section of =test/siro-gptel-comparator-test.el= and the
+Pipeline A comment inside =siro-gptel-comparator-test--run-both= still
+described the old "synthesize transient buffer" mechanism.  Both were
+refreshed in the same commit to describe the current canonical+formatter
+=:around= behavior.
 
 **** AI-DO Non-org one-shot extractor
 Trivial helper for non-org buffers (markdown, text, code modes).
