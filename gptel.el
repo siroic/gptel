@@ -1275,7 +1275,7 @@ See `gptel-request--transitions' for details.")
           ,#'gptel--update-tool-ask)
     (TRET ,#'gptel--handle-post-tool ,#'gptel--handle-tool-result)
     (DONE ,#'gptel--handle-post-insert ,#'gptel--fsm-last)
-    (ABRT ,#'gptel--handle-abort))
+    (ABRT ,#'gptel--handle-abort ,#'gptel--fsm-last))
   "Alist specifying handlers for `gptel-send' state transitions.
 
 See `gptel-request--handlers' for details.")
