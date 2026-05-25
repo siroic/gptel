@@ -1904,19 +1904,46 @@ injects the results into the prompt data and transitions the FSM."
                    (setq confirm t)))
                  (if confirm  ;To send to callback for confirmation
                      (push (list tool-spec args process-tool-result) pending-calls)
-                   (let ((arg-values (gptel--map-tool-args tool-spec args)))
-                     (if (gptel-tool-async tool-spec) ;If not, run the tool
-                         (apply (gptel-tool-function tool-spec)
-                                process-tool-result arg-values)
-                       (let ((result (condition-case errdata
-                                         (apply (gptel-tool-function tool-spec) arg-values)
-                                       (error (mapconcat #'gptel--to-string errdata " ")))))
-                         (funcall process-tool-result result)))))))))
+                   (if-let* ((err (gptel--validate-tool-args tool-spec args)))
+                       (funcall process-tool-result err)
+                     (let ((arg-values (gptel--map-tool-args tool-spec args)))
+                       (if (gptel-tool-async tool-spec) ;If not, run the tool
+                           (apply (gptel-tool-function tool-spec)
+                                  process-tool-result arg-values)
+                         (let ((result (condition-case errdata
+                                           (apply (gptel-tool-function tool-spec) arg-values)
+                                         (error (mapconcat #'gptel--to-string errdata " ")))))
+                           (funcall process-tool-result result))))))))))
          tool-use)
         (when pending-calls
           (plist-put info :tool-pending t)
           (funcall (plist-get info :callback)
                    (cons 'tool-call pending-calls) info))))))
+
+(defun gptel--validate-tool-args (tool-spec args)
+  "Validate that ARGS contains all required arguments for TOOL-SPEC.
+
+TOOL-SPEC is a `gptel-tool' and ARGS is a plist of arguments for a tool
+call.  An argument is required iff its spec does not have `:optional t'.
+
+Use `plist-member' (not `plist-get') to distinguish missing arguments
+from arguments explicitly set to nil or false.
+
+Return nil if all required arguments are present.  Otherwise return an
+error string suitable for returning to the LLM as the tool result,
+listing the missing arguments and asking the model to retry."
+  (let ((missing))
+    (dolist (arg (gptel-tool-args tool-spec))
+      (let ((name (plist-get arg :name)))
+        (unless (or (plist-get arg :optional)
+                    (plist-member args (intern (concat ":" name))))
+          (push name missing))))
+    (when missing
+      (format (concat "Error: tool call to `%s' is missing required"
+                      " argument(s): %s.  Please retry the tool call"
+                      " with all required arguments.")
+              (gptel-tool-name tool-spec)
+              (mapconcat #'identity (nreverse missing) ", ")))))
 
 (defun gptel--map-tool-args (tool-spec args)
   "Create a tool call argument list from TOOL-SPEC and ARGS.
