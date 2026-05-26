@@ -749,6 +749,152 @@ all green on first full green run).
   org buffers with =gptel-org-branching-context= enabled, ready
   for the sibling Cleanup TODO.
 
+**** AI-DO Parse the live org buffer directly — eliminate the synthetic prompt buffer
+***** Origin
+The =:around= advice on =gptel--parse-buffer= in
+=~/siro-orga/siro-gptel-parse.el= already returns wire-format
+messages directly (see AI-DONE sibling
+[[file:gptel.org::*Switch siro =:around= method to bypass synthetic buffer]]).
+It never reads the synthetic =" *gptel-prompt*"= buffer's content
+for the AI-DO and lineage paths — yet =gptel--create-prompt= still
+calls =gptel--create-prompt-buffer=, which creates that temp
+buffer, copies the org text into it, and wraps the parse call in
+=(with-current-buffer temp ...)=.  The walker therefore /runs/ in
+a synthetic buffer where =org-todo-keywords-1=,
+=org-todo-regexp=, =org-done-keywords= etc. are *not* set up
+(=gptel--with-buffer-copy-internal= only copies an explicit list
+of =gptel-*= vars + =major-mode= by =setq=, never calling
+=(org-mode)=).
+
+This causes =org-get-todo-state= to silently return =nil= for
+"AI-DO" headings, making =siro-gptel-headings-current-ai-do-bounds=
+fail in the temp buffer.  Today it only works because
+=gptel-org--create-prompt-buffer= manually patches
+=org-complex-heading-regexp= after the copy — a hidden, fragile
+work-around.
+
+The producer side (=~/siro-orga/siro-org-indirect.el=) already
+relies on Emacs' indirect-buffer machinery, which /shares/ all
+buffer-local state (including =org-todo-keywords-1=,
+=org-element= caches, file-local variables) with the parent.  An
+indirect buffer "is" the parent buffer for parsing purposes.
+The elegant symmetry: if the producer writes into a narrowed
+indirect buffer, the consumer should parse the live buffer too
+— no copy, no patched regexps, no state to lose.
+
+***** Discussion highlights
+- *The copy serves no one on the org path.*  AI-DO and lineage
+  return wire-format directly; the synthetic buffer's contents are
+  never read.  Even the in-place buffer is only used as a
+  =(current-buffer)= scope, and that scope is /wrong/ — it hides
+  the org TODO machinery.
+- *=buffer-base-buffer= is the key primitive.*  Whether the user
+  is in the main org file or a narrowed indirect buffer, the live
+  org state lives in the base buffer.  =(or (buffer-base-buffer)
+  (current-buffer))= gives the right place to walk from in either
+  case.
+- *Two intervention points, ordered by surgical-ness:*
+  - *Option A — minimal, inside siro:*  Wrap the walker calls in
+    =(with-current-buffer (or (buffer-base-buffer) (current-buffer)) ...)=
+    in =siro-gptel-parse.el='s =:around= method.  When the temp
+    buffer is current, this is still wrong (temp's base-buffer is
+    nil, so it falls back to temp).  /Insufficient on its own./
+  - *Option B — intercept earlier:*  Add an =:around= advice (or
+    method) on =gptel--create-prompt-buffer= that, for org-mode
+    callers, returns =(current-buffer)= directly instead of a
+    temp copy.  =gptel--create-prompt= then runs its
+    =with-current-buffer= on the live org buffer; the existing
+    =:around= on =gptel--parse-buffer= sees the live buffer with
+    full org state.  The =kill-buffer= in the =unwind-protect=
+    becomes a problem — we must not kill the user's buffer.
+  - *Option C — Option B with a sentinel:*  Return the live
+    buffer from =gptel--create-prompt-buffer=, but mark it
+    (buffer-local flag) and override =kill-buffer= behaviour, or
+    restructure =gptel--create-prompt= to not kill when the
+    returned buffer === the source buffer.  This is the cleanest
+    semantically.
+- *Non-org paths are unaffected.*  The =:around= on
+  =gptel--parse-buffer= falls through to =cl-call-next-method= for
+  non-org, which still expects a temp buffer to read text from.
+  Either keep the temp-buffer path for non-org (Option B/C does
+  this naturally — only override the org branch) or fold the
+  non-org case into the "Non-org one-shot extractor" sibling TODO
+  ([[file:gptel.org::*Non-org one-shot extractor]]).
+- *Relationship to the Cleanup TODO below:*  This TODO removes
+  the /call sites/ of the buffer-copy machinery for the org
+  path.  Once non-org is also handled (sibling TODO), the
+  Cleanup TODO can delete the functions outright.  This TODO is
+  a *prerequisite* — it makes the cleanup non-destructive.
+
+***** Decisions
+- Use *Option C* — restructure =gptel--create-prompt= so the
+  org path returns the live buffer and the =unwind-protect= does
+  not kill it.  Reason: it makes the "live buffer is the parse
+  buffer" semantics explicit at the highest level, removes all
+  hidden state-copy fragility, and naturally composes with the
+  indirect-buffer producer side.
+- Walk in =(or (buffer-base-buffer) (current-buffer))= so the
+  same code works whether the user invokes gptel from the main
+  org file or from a narrowed indirect buffer.
+
+***** Mission
+Make the live org buffer (possibly an indirect buffer narrowed to
+a subtree) the parse buffer for AI-DO and lineage paths.  Stop
+creating =" *gptel-prompt*"= for org-mode callers.  Preserve
+non-org behaviour (single-prompt extractor lives in the sibling
+TODO).
+
+***** TODOs
+****** AI-DO Verify the failing case in the synthetic buffer
+Add a unit test that demonstrates the current bug: in a buffer
+created the way =gptel--with-buffer-copy-internal= creates one
+(i.e., =generate-new-buffer= + =insert-buffer-substring= + =setq
+major-mode=), =org-get-todo-state= returns nil for an "AI-DO"
+heading even though =#+SEQ_TODO:= in the source declares it.
+Confirms the diagnosis before changing pipeline structure.
+
+****** AI-DO Override =gptel--create-prompt-buffer= for org-mode
+Add a method (or =:around= advice) in =~/siro-orga/= that, when
+=(derived-mode-p 'org-mode)= in the calling buffer, returns
+=(current-buffer)= directly without creating a temp buffer.
+Non-org callers fall through to the upstream implementation
+unchanged.
+
+****** AI-DO Suppress =kill-buffer= when parse buffer === source buffer
+In =gptel--create-prompt= (=~/gptel/gptel-request.el= L2380–2385),
+change the =unwind-protect= cleanup so it only kills the buffer
+when it differs from the caller's =(current-buffer)=.  Concretely:
+capture the source buffer before =with-current-buffer=, compare
+inside the cleanup form, kill only on mismatch.  Single-call-site
+change; safe for non-org.
+
+****** AI-DO Run the walker in =(buffer-base-buffer)= when present
+In =~/siro-orga/siro-gptel-parse.el=, wrap the AI-DO and lineage
+walker invocations in =(with-current-buffer (or (buffer-base-buffer)
+(current-buffer)) ...)=.  Idempotent: if the live buffer is not
+indirect, this is a no-op.  Ensures the walker sees full org
+state regardless of how the user invoked gptel.
+
+****** AI-DO Remove the manual =org-complex-heading-regexp= patch
+Once the walker no longer runs in a synthetic buffer, the manual
+copy of =org-complex-heading-regexp= in
+=gptel-org--create-prompt-buffer= (the lines that =setq-local= it
+after =gptel--with-buffer-copy=) is dead for siro paths.  Verify
+unreachable, then remove as part of the sibling Cleanup TODO
+[[file:gptel.org::*Cleanup: remove upstream buffer-copy code]].
+
+****** AI-DO Add end-to-end test: indirect buffer as parse buffer
+Create a test that:
+1. Opens an org file with =#+SEQ_TODO:= declaring AI-DO.
+2. Calls =siro-org--subtree-indirect-buffer= on an AI-DO subtree.
+3. Invokes the parse path from the indirect buffer.
+4. Asserts the walker emits the expected canonical plists, with
+   correct role assignments derived from =org-get-todo-state=
+   (proving the org TODO machinery is alive in the parse buffer).
+
+***** Outcomes / Results
+(filled in when AI-DONE)
+
 **** AI-DO Cleanup: remove upstream buffer-copy code (unconditional)
 Once all of the above lands and is stable, delete the buffer-copy
 machinery outright — both paths (org walker, non-org one-shot
@@ -764,6 +910,8 @@ replaces old one, no toggle, no compat layer").
 
 This is a fork-divergence decision — explicit user approval required
 before deleting any upstream function.
+
+***** FEEDBACK Cleanup approved
 
 **** AI-DONE Cross-reference IB producer side in Origin / Key file references
 The parser implementation in this TODO is the read-side counterpart of
