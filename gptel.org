@@ -526,10 +526,39 @@ Resolved: see body above and =*** Decisions=.
 ***** FEEDBACK Should all AI discussion responses have org-id
 - This includes reasoning, respond, tool etc
 
-**** AI-DO Move reasoning storage to plain =REASONED= headings
+**** AI-DONE Move reasoning storage to plain =REASONED= headings
 Same idea: =REASONED= heading body holds reasoning text; walker emits
 =(:role 'reasoning …)= only when =gptel-include-reasoning= is non-nil
 and not ='ignore=.  Drop ='gptel 'ignore= text property usage for org.
+
+***** Outcomes
+- =gptel/gptel.el=: org-mode branch of reasoning insertion (both
+  non-streaming `gptel--insert-response`-side handler and streaming
+  =gptel--display-reasoning-stream=) now writes raw reasoning text
+  directly — no =#+begin_reasoning= / =#+end_reasoning= fences, no
+  ='gptel 'ignore= text property.  Insertion lands in the REASONED
+  heading body via the indirect buffer opened by the
+  pre-reasoning hook.  Non-org markdown path retained verbatim.
+- =siro-orga/siro-gptel-headings.el=: removed
+  =siro-gptel-resend-reasoning= defcustom.  Added predicate
+  =siro-gptel-headings--include-reasoning-p= driving walker
+  emission off =gptel-include-reasoning= (emit when =t= or buffer
+  name, skip on =nil= / ='ignore=).  Updated both the canonical
+  walker and the lineage walker to use the predicate.
+- =siro-orga/siro-gptel-hooks.el=: gated =--pre-reasoning= on
+  =gptel-include-reasoning= — when =nil= the REASONING segment IB
+  is not opened at all, dropping reasoning entirely from the
+  buffer.  ='ignore= / =t= / buffer name still open the segment so
+  the user sees the reasoning.
+- Tests: replaced all =siro-gptel-resend-reasoning= bindings in
+  =test/siro-gptel-headings-test.el= and
+  =test/siro-gptel-comparator-test.el= with corresponding
+  =gptel-include-reasoning= bindings (='ignore= for the off case,
+  =t= for the on case).
+- Doc updates: =siro-orga/siro-orga.org= reasoning replay section
+  rewritten to reference =gptel-include-reasoning=; matching doc
+  comment in =siro-gptel-format.el= updated.
+- All 61 siro-orga tests pass.
 
 **** AI-DONE Restructure =gptel-org-branching-context= to lineage walker
 Replace textual ancestor-region concatenation with structural lineage
