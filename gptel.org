@@ -2,6 +2,73 @@
 * MUST READ
 * Future plans
 * TODOs
+** AI-DO Prefer modified visiting buffer over disk in file-based context
+*** Origin
+Reported in =siro-orga= workspace discussion: when a user adds
+feedback under a TODO heading in a project doc but does *not* save
+the buffer, then triggers a gptel request that has that file in
+context, the AI sees the *on-disk* version — the unsaved feedback is
+invisible.  Repeatedly surprises users who treat the buffer as the
+source of truth.
+
+*** Discussion highlights
+Investigation traced the bug to file-based context construction:
+
+- =gptel-context--insert-file-string= (=gptel-context.el:588=) is the
+  dispatch for file context.
+- Whole-file path → =gptel--insert-file-string= (=gptel-request.el:980=)
+  unconditionally calls =(insert-file-contents path)= → reads disk.
+- Partial-range path (=:lines= / =:bounds=) calls
+  =find-buffer-visiting= *but* with predicate
+  =(lambda (b) (not (buffer-modified-p b)))= — it *explicitly skips
+  modified visiting buffers* and falls back to disk.  This is the
+  opposite of what users expect.
+- Buffer-based context (=gptel-context--insert-buffer-string=) is
+  fine — it reads the live buffer via =insert-buffer-substring-no-properties=.
+- =gptel-org--create-prompt-buffer= is fine — it always uses live
+  buffer content for the *sending* buffer.
+
+| Scenario                                    | What is read |
+|---------------------------------------------+--------------|
+| Buffer added directly                       | Live buffer ✓ |
+| File added, whole file                      | Disk ✗       |
+| File added with bounds, buffer unmodified   | Live buffer ✓ |
+| File added with bounds, buffer modified     | Disk ✗       |
+
+*** Mission
+Make file-based context prefer a live visiting buffer over the
+on-disk contents.  Concretely, in =gptel-context--insert-file-string=
+(=gptel-context.el:588-608=):
+
+1. For the *whole-file* branch, check =(find-buffer-visiting path)=
+   first.  If a buffer is visiting, render its live content via
+   =gptel-context--insert-buffer-string= regardless of modification
+   state.  Fall back to =gptel--insert-file-string= only when no
+   buffer is visiting.
+2. For the *partial-range* branch, drop the
+   =(not (buffer-modified-p b))= predicate from the existing
+   =find-buffer-visiting= call so modified visiting buffers are
+   preferred (not skipped).
+
+Open question: should this be the unconditional default, or gated
+behind a defcustom (e.g. =gptel-context-prefer-buffer= default =t=)?
+Recommend unconditional + a defcustom escape hatch for users who
+explicitly want disk semantics.
+
+*** TODOs
+- [ ] Patch =gptel-context--insert-file-string= whole-file branch to
+  prefer visiting buffer.
+- [ ] Patch the partial-range branch to drop the
+  =(not (buffer-modified-p b))= filter.
+- [ ] Optional defcustom =gptel-context-prefer-buffer= (default =t=).
+- [ ] Add a test in =test/= covering: file in context + modified
+  visiting buffer → request payload contains buffer text, not disk
+  text.
+- [ ] Update docstring of =gptel-context-add-file= to document the
+  buffer-preference behaviour.
+
+*** Outcomes / Results
+
 ** AI-DONE Apply GPTEL_PRESET to backend/model in =gptel-org--send-with-props=
 CLOSED: in commit bf867c3 on branch orga
 *** Origin
