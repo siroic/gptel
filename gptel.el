@@ -963,7 +963,8 @@ Search between BEG and END."
         (concat
          (propertize
           " " 'display
-          (if (fboundp 'string-pixel-width)
+          (if (and (fboundp 'string-pixel-width)
+                   (display-graphic-p))
               `(space :align-to (- right (,(string-pixel-width rhs))))
             `(space :align-to (- right ,(+ 5 (string-width rhs))))))
          rhs))))
@@ -2447,10 +2448,10 @@ This is a bug, please report it!"))))
 (defun gptel--inspect-reject-tool-calls (&optional _)
   "Cancel tool-calls and return to query buffer."
   (interactive)
-  (quit-window t)
   (apply #'gptel--reject-tool-calls
    (thread-first (gptel-fsm-info gptel--fsm-last)
-                 (plist-get :tool-display))))
+                 (plist-get :tool-display)))
+  (quit-window t))
 
 (defun gptel--inspect-quit-tool-calls (&optional _)
   "Quit inspection window and return to query buffer."

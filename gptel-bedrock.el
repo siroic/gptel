@@ -84,11 +84,17 @@ back to the LLM)."
   (let ((base-request-data
          (nconc
           `(:messages [,@prompts] :inferenceConfig (:maxTokens ,(or gptel-max-tokens 500)))
-          (when gptel--system-message `(:system [(:text ,gptel--system-message)]))
+          (when gptel--system-message
+            `(:system [(:text ,gptel--system-message)
+                       ,@(when (or (eq gptel-cache t) (memq 'system gptel-cache))
+                           '((:cachePoint (:type "default"))))]))
           (when gptel-temperature `(:temperature ,gptel-temperature))
           (when (and gptel-use-tools gptel-tools)
             `(:toolConfig (:toolChoice ,(if (eq gptel-use-tools 'force) '(:any '()) '(:auto '()))
-                           :tools ,(gptel--parse-tools backend gptel-tools)))))))
+                           :tools ,(let ((tools (gptel--parse-tools backend gptel-tools)))
+                                     (if (or (eq gptel-cache t) (memq 'tool gptel-cache))
+                                         (vconcat tools [(:cachePoint (:type "default"))])
+                                       tools))))))))
 
     ;; Finally, merge all potential :request-params sources.
     (gptel--merge-plists
@@ -503,7 +509,7 @@ The output is a vector of entries in Bedrock API format."
              `(:image (:format ,(cdr format) :source (:bytes ,(gptel--base64-encode media)))))
             ((setq format (assoc mime gptel-bedrock--doc-formats))
              `(:document (:format ,(cdr format)
-                          :name ,(file-name-nondirectory media)
+                          :name ,(file-name-sans-extension (file-name-nondirectory media))
                           :source (:bytes ,(gptel--base64-encode media)))))
             (t (error "Unsupported MIME type %s for AWS Bedrock" mime))))
           (textfile `(:text ,(with-temp-buffer
