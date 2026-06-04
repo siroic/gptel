@@ -102,6 +102,24 @@ context."
   :group 'gptel
   :type 'boolean)
 
+(defcustom gptel-context-prefer-buffer t
+  "Whether file context should prefer a live visiting buffer over disk.
+
+When non-nil (the default), if a file added to the gptel context is
+being visited by a buffer, that buffer's contents are sent — including
+any unsaved modifications.  This matches the usual expectation that
+the buffer is the source of truth while you are editing.
+
+When nil, file context is always read from disk, ignoring any
+visiting buffer's modifications.  This was the historical behaviour
+prior to this option being introduced.
+
+Affects only file context (as added via `gptel-context-add-file').
+Buffer context (added directly via `gptel-context-add') always reads
+the live buffer regardless of this setting."
+  :group 'gptel
+  :type 'boolean)
+
 (defvar gptel-context--project-files nil
   "Cached alist of project files per project.")
 
@@ -271,7 +289,11 @@ ACTION should be either `add' or `remove'."
   "Add the file at PATH to the gptel context.
 
 If PATH is a directory, recursively add all files in it.  PATH should be
-readable as text."
+readable as text.
+
+When a buffer is visiting PATH at request time, its live contents
+(including any unsaved modifications) are sent in place of the on-disk
+file.  See `gptel-context-prefer-buffer' to disable this behaviour."
   (interactive "fChoose file to add to context: ")
   (cond ((file-directory-p path)
          (gptel-context--add-directory path 'add))
@@ -589,22 +611,35 @@ HEADER is an optional header to insert before the contents."
   "Insert at point the contents of file at PATH as context.
 
 SPEC is a plist specifying :lines or position :bounds to include instead
-of the entire file.  See `gptel-context' for details."
-  (if (not (and spec (or (plist-member spec :lines)
-                         (plist-member spec :bounds))))
-      ;; Insert whole file
-      (gptel--insert-file-string path)
-    ;; Insert only regions from lines and/or bounds
-    (let* ((visiting-buf (find-buffer-visiting ;Reuse buffer
-                          path (lambda (b) (not (buffer-modified-p b)))))
-           (file-buf (or visiting-buf   ;temp buf to dump file contents
-                         (gptel--temp-buffer " *gptel-file-context*"))))
-      (unless visiting-buf
-        (with-current-buffer file-buf (insert-file-contents path)))
-      (gptel-context--insert-buffer-string
-       file-buf spec (format "In file `%s`:\n\n```\n"
-                             (abbreviate-file-name path)))
-      (unless visiting-buf (kill-buffer file-buf)))))
+of the entire file.  See `gptel-context' for details.
+
+When `gptel-context-prefer-buffer' is non-nil, a live buffer visiting
+PATH (including one with unsaved modifications) is preferred over the
+on-disk contents."
+  (let* ((header (format "In file `%s`:\n\n```\n"
+                         (abbreviate-file-name path)))
+         ;; Pick a visiting buffer per `gptel-context-prefer-buffer':
+         ;; when non-nil, accept any visiting buffer (modified or not);
+         ;; when nil, only reuse an unmodified visiting buffer (legacy
+         ;; behaviour) so modifications stay invisible to the model.
+         (visiting-buf (if gptel-context-prefer-buffer
+                           (find-buffer-visiting path)
+                         (find-buffer-visiting
+                          path (lambda (b) (not (buffer-modified-p b)))))))
+    (if (not (and spec (or (plist-member spec :lines)
+                           (plist-member spec :bounds))))
+        ;; Insert whole file
+        (if visiting-buf
+            (gptel-context--insert-buffer-string visiting-buf nil header)
+          (gptel--insert-file-string path))
+      ;; Insert only regions from lines and/or bounds
+      (let ((file-buf (or visiting-buf ;Reuse buffer when available
+                          ;; temp buf to dump file contents
+                          (gptel--temp-buffer " *gptel-file-context*"))))
+        (unless visiting-buf
+          (with-current-buffer file-buf (insert-file-contents path)))
+        (gptel-context--insert-buffer-string file-buf spec header)
+        (unless visiting-buf (kill-buffer file-buf))))))
 
 (defun gptel-context--string (context-alist)
   "Format the aggregated gptel context as annotated markdown fragments.
