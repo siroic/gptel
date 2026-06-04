@@ -2,7 +2,8 @@
 * MUST READ
 * Future plans
 * TODOs
-** AI-DO Prefer modified visiting buffer over disk in file-based context
+** AI-DONE Prefer modified visiting buffer over disk in file-based context
+CLOSED: in commit 8a72b7f on branch orga
 *** Origin
 Reported in =siro-orga= workspace discussion: when a user adds
 feedback under a TODO heading in a project doc but does *not* save
@@ -56,16 +57,70 @@ Recommend unconditional + a defcustom escape hatch for users who
 explicitly want disk semantics.
 
 *** TODOs
-- [ ] Patch =gptel-context--insert-file-string= whole-file branch to
+- [X] Patch =gptel-context--insert-file-string= whole-file branch to
   prefer visiting buffer.
-- [ ] Patch the partial-range branch to drop the
+- [X] Patch the partial-range branch to drop the
   =(not (buffer-modified-p b))= filter.
-- [ ] Optional defcustom =gptel-context-prefer-buffer= (default =t=).
-- [ ] Add a test in =test/= covering: file in context + modified
-  visiting buffer → request payload contains buffer text, not disk
-  text.
-- [ ] Update docstring of =gptel-context-add-file= to document the
+- [X] Optional defcustom =gptel-context-prefer-buffer= (default =t=).
+- [X] Update docstring of =gptel-context-add-file= to document the
   buffer-preference behaviour.
+- Tests deferred to follow-up TODO (see
+  [[*Set up gptel test infrastructure and add buffer-preference tests]])
+  because =~/gptel/test/= has no infrastructure yet and the
+  =~/siro-orga/test/Makefile= only loads siro-orga sources.
+
+*** Outcomes / Results
+Landed in commit =8a72b7f= on branch =orga=.
+
+- New defcustom =gptel-context-prefer-buffer= (default =t=, type
+  =boolean=) added in =gptel-context.el= immediately after
+  =gptel-context-restrict-to-project-files=.
+- =gptel-context--insert-file-string= reworked: both the whole-file
+  and partial-range branches now compute =visiting-buf= up front,
+  accepting any visiting buffer (modified or not) when the defcustom
+  is non-nil, or only an unmodified one when nil.  The whole-file
+  branch routes through =gptel-context--insert-buffer-string= with an
+  explicit file-style header when a buffer is found, falling back to
+  =gptel--insert-file-string= (disk read) otherwise.
+- =gptel-context-add-file= docstring updated to document the
+  buffer-preference behaviour and reference the defcustom.
+- =emacs -Q --batch -L . -f batch-byte-compile gptel-context.el=
+  produced no warnings or errors.
+- ERT tests for the new behaviour are tracked under the follow-up
+  TODO above.
+
+** AI-DO Set up gptel test infrastructure and add buffer-preference tests
+*** Origin
+Follow-up from [[*Prefer modified visiting buffer over disk in file-based context]].
+The implementation landed in commit =8a72b7f= without tests because
+=~/gptel/test/= has no infrastructure and the =~/siro-orga/test/Makefile=
+only loads siro-orga sources, not gptel.
+
+*** Mission
+Stand up an ERT test harness under =~/gptel/test/= and add coverage
+for the buffer-preference behaviour introduced by
+=gptel-context-prefer-buffer=, so future regressions in the
+file-vs-buffer-of-context dispatch are caught automatically.
+
+*** TODOs
+- [ ] Add =~/gptel/test/Makefile= mirroring the structure of
+  =~/siro-orga/test/Makefile= but pointing =-L= at the gptel source
+  tree (and any required dependencies — at minimum =gptel-request=,
+  =gptel=, =gptel-context=).
+- [ ] Decide on test-file naming (e.g. =test-gptel-context.el=) and
+  add a minimal smoke test to validate the harness.
+- [ ] ERT test: file added to context, whole-file (no =:lines= /
+  =:bounds=), visiting buffer modified relative to disk →
+  rendered context contains the *buffer* text, not the disk text.
+- [ ] ERT test: file added to context with =:lines= or =:bounds=,
+  visiting buffer modified → rendered context contains the buffer
+  text in the requested range.
+- [ ] ERT test: both scenarios above with
+  =gptel-context-prefer-buffer= let-bound to =nil= → rendered
+  context contains the *disk* text (regression guard for the
+  legacy code path).
+- [ ] Wire the new Makefile into any project-level CI/test entry
+  point if applicable, or document how to run it.
 
 *** Outcomes / Results
 
