@@ -1,5 +1,41 @@
 #+SEQ_TODO: GLOB READ INSERT EDIT WRITE GREP EVAL BASH GATHER GATHERING GATHERED EXECUTE EXECUTING EXECUTED RESEARCH RESEARCHING RESEARCHED DEEP-RESEARCH DEEP-RESEARCHING DEEP-RESEARCHED IMPLEMENT IMPLEMENTING IMPLEMENTED INTROSPECT INTROSPECTING INTROSPECTED TODO(t) AI-DO(a) AI-DOING(i) DOING FEEDBACK(f) DENIED(d@) PENDING(p) ALLOWED(A)  AI_FEEDBACK RESPOND RESPONDING REASON REASONING | AI-DONE(d) DONE(D) ARCHIVED(r) CANCELED(c) RESPONDED REASONED
 * MUST READ
+** Fork divergence: =gptel-prompt-boundary=
+This fork (=orga= branch) ships a user option
+=gptel-prompt-boundary= that controls how =gptel-send= extends point
+when constructing the prompt with no active region.  Upstream
+karthink/gptel hard-codes word-boundary extension via
+=skip-syntax-forward "w."= (defined as the =gptel--at-word-end=
+macro).  This fork dispatches on =gptel-prompt-boundary= instead;
+the macro is renamed to =gptel--at-prompt-end=.
+
+Default value: ='sentence=.  This is a behaviour change from
+upstream: invoking =gptel-send= mid-sentence now sends the complete
+sentence up to its terminator (via =forward-sentence=) rather than
+silently truncating at the end of the current word.
+
+Available values:
+
+| Value       | Behaviour                                                                     |
+|-------------+-------------------------------------------------------------------------------|
+| =sentence=  | (default) Extend point to end of current sentence via =forward-sentence=.     |
+| =word=      | Historical / upstream behaviour: =skip-syntax-forward "w."=. Evil-friendly.   |
+| =paragraph= | Extend point to end of current paragraph via =forward-paragraph=.             |
+| =point=     | No extension.  Off-by-one under evil normal state — use with care.            |
+
+When the region is active, this option is ignored; the region
+delimits the prompt exactly.
+
+Set in =init.el= to restore upstream behaviour:
+
+#+begin_src emacs-lisp
+(setq gptel-prompt-boundary 'word)
+#+end_src
+
+Implementation: =defcustom= in =gptel-request.el= near the other
+=gptel-prompt-*= options; dispatch in the =gptel--at-prompt-end=
+macro at =gptel-request.el:1037=.
+
 * Future plans
 * TODOs
 ** AI-DONE Prefer modified visiting buffer over disk in file-based context
@@ -1251,7 +1287,7 @@ tagging.
 | Canonical-message walker (Phase 1)   | =siro-gptel-headings.el::*walk-conversation--canonical= |
 | Canonical TODO-keyword set           | =~/siro-orga/siro-orga.org= (=#+SEQ_TODO=) |
 | Per-agent state-words                | =~/siro-orga/agents/*.org= =:state-words= |
-** AI-DO Extend prompt boundary to end-of-sentence (configurable)
+** AI-DONE Extend prompt boundary to end-of-sentence (configurable)
 *** Origin
 Raised in =~/siro-orga/siro-orga.ws.org= discussion: when the user
 invokes =gptel-send= with point mid-sentence, the current
@@ -1346,7 +1382,7 @@ just typed.  Preserve =word= as an opt-in for evil-mode users and add
 =paragraph= / =point= as additional strategies.
 
 *** TODOs
-**** AI-DO Add =gptqeql-prompt-boundary= defcustom
+**** AI-DONE Add =gptel-prompt-boundary= defcustom
 - Add to =~/gptel/gptel.el= near other prompt-related defcustoms
   (search for =gptel-prompt-prefix-alist= as anchor).
 - Type: =(choice (const :tag "End of sentence" sentence)
@@ -1357,7 +1393,7 @@ just typed.  Preserve =word= as an opt-in for evil-mode users and add
 - Docstring covers each value, notes evil-mode caveat for ='point=,
   notes region usage bypasses the option.
 
-**** AI-DO Rename =gptel--at-word-end= → =gptel--at-prompt-end= and dispatch on the option
+**** AI-DONE Rename =gptel--at-word-end= → =gptel--at-prompt-end= and dispatch on the option
 - Modify =~/gptel/gptel-request.el:1037=.
 - New body branches on =gptel-prompt-boundary=:
   - ='sentence= → =(ignore-errors (forward-sentence))= followed by
@@ -1372,12 +1408,12 @@ just typed.  Preserve =word= as an opt-in for evil-mode users and add
 - Update both call sites at =gptel-request.el:2181= and =:2189= to
   use the new name.
 
-**** AI-DO Update inline comment / docstring at call sites
+**** AI-DONE Update inline comment / docstring at call sites
 - The comment =; Send text up to end of word (for evil-mode users)=
   (around =gptel-request.el:2188=) becomes stale.  Replace with a
   reference to =gptel-prompt-boundary=.
 
-**** AI-DO Tests
+**** AI-DONE Tests
 - Add tests under the gptel test infrastructure (see sibling AI-DO
   [[file:gptel.org::*Set up gptel test infrastructure and add buffer-preference tests][Set up gptel test infrastructure]]; if that hasn't landed yet, file
   these tests alongside it or in =~/siro-orga/test/=).
@@ -1391,11 +1427,50 @@ just typed.  Preserve =word= as an opt-in for evil-mode users and add
   - ='point=: raw point, no extension.
   - Region active: option ignored regardless of value.
 
-**** AI-DO Document in =gptel.org= MUST READ / user-facing docs
+**** AI-DONE Document in =gptel.org= MUST READ / user-facing docs
 - Mention the new defcustom in the appropriate user-facing section
   of =gptel.org= (or upstream README if applicable for this fork).
 - Note the behaviour change vs. upstream karthink/gptel — this is a
   fork-divergence; explicit user approval already given via this TODO.
+
+*** Outcomes / Results
+- New defcustom =gptel-prompt-boundary= added in
+  =gptel-request.el= immediately after =gptel-response-separator=
+  (the natural anchor next to the other prompt-prefix defcustoms;
+  =gptel.el= was originally proposed in the TODO but the consumer
+  =gptel--at-prompt-end= lives in =gptel-request.el=, so keeping the
+  defcustom in the same file avoids a cross-file split).  Default
+  ='sentence=, type =choice= over =sentence=/=word=/=paragraph=/=point=.
+- =gptel--at-word-end= renamed to =gptel--at-prompt-end= in
+  =gptel-request.el:1037=.  Body rewritten as a =pcase= dispatch on
+  =gptel-prompt-boundary= matching the semantics in /Decisions/
+  above:
+  - ='sentence= → =(ignore-errors (forward-sentence))= +
+    =(skip-syntax-backward " ")=.
+  - ='word= → preserved historical =(skip-syntax-forward "w.")=.
+  - ='paragraph= → =(ignore-errors (forward-paragraph))= +
+    =(skip-syntax-backward " ")=.
+  - ='point= → no movement.
+  =save-excursion= wrapper preserved so call sites remain one-liners.
+- Three call sites updated:
+  =gptel-request.el:2181=, =gptel-request.el:2189=, and the third
+  site that the original TODO missed: =gptel-transient.el:1701=
+  (used by =gptel-menu= when constructing the reduced prompt).
+  The stale inline comment "Send text up to end of word (for
+  evil-mode users)" was replaced with a reference to
+  =gptel-prompt-boundary=.
+- ERT tests added in =~/siro-orga/test/gptel-prompt-boundary-test.el=
+  (7 tests; the existing =~/siro-orga/test/Makefile= picks them up
+  automatically).  =~/gptel/test/= still has no harness — sibling
+  AI-DO [[file:gptel.org::*Set up gptel test infrastructure and add buffer-preference tests][Set up gptel test infrastructure]] remains open.  Tests bind
+  =sentence-end-double-space= to =nil= so fixtures are independent
+  of the user's setting.  All 23 ERT tests pass (7 new + 16 prior).
+- Documentation: a brief user-facing entry was added under [[*MUST READ]]
+  describing =gptel-prompt-boundary= and the fork divergence from
+  upstream karthink/gptel.
+- Byte-compilation (=emacs -Q --batch -L . -f batch-byte-compile
+  gptel-request.el gptel-transient.el=) produced no warnings new
+  to this change.
 
 *** Out of scope
 - Re-thinking the broader prompt-construction pipeline (covered by
