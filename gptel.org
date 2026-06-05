@@ -1251,3 +1251,163 @@ tagging.
 | Canonical-message walker (Phase 1)   | =siro-gptel-headings.el::*walk-conversation--canonical= |
 | Canonical TODO-keyword set           | =~/siro-orga/siro-orga.org= (=#+SEQ_TODO=) |
 | Per-agent state-words                | =~/siro-orga/agents/*.org= =:state-words= |
+** AI-DO Extend prompt boundary to end-of-sentence (configurable)
+*** Origin
+Raised in =~/siro-orga/siro-orga.ws.org= discussion: when the user
+invokes =gptel-send= with point mid-sentence, the current
+implementation only sends content up to the *end of the current word*,
+silently truncating the rest of the sentence the user just typed.
+
+Researcher findings (concise summary):
+- =gptel-send= (=~/gptel/gptel.el:1674=) delegates to =gptel-request=.
+- =gptel-request= (=~/gptel/gptel-request.el:2176-2189=) computes both
+  the response insertion marker and the prompt-buffer end via the
+  =gptel--at-word-end= macro.
+- =gptel--at-word-end= (=~/gptel/gptel-request.el:1037=) does
+  =(skip-syntax-forward "w.")= — skips word-constituent + punctuation
+  chars only.  It does *not* advance over whitespace, to end of
+  sentence, or to end of paragraph.
+- The macro was introduced as a workaround for evil-mode normal state
+  (point sits /on/ a char, not /after/ it).  Inline comment at
+  =gptel-request.el:2188=: =; Send text up to end of word (for
+  evil-mode users)=.
+- Behaviour applies to both non-org (=point-min=..=prompt-end=) and
+  org (lineage / AI-DO walkers ultimately bounded by =prompt-end=)
+  paths.
+
+Concretely, with buffer ="The cat sat. The dog |looked up."= (=|=
+= point inside "looked"), the prompt sent is ="The cat sat. The dog
+looked"= — the trailing =" up."= is dropped.  This is documented but
+arguably surprising: mid-sentence point is usually an editing artifact
+(scrolled back to fix something, then forgot to move forward), not a
+semantic "send up to here" boundary.
+
+*** Discussion highlights
+- Word-boundary extension is a /narrow/ evil-mode fix, not a general
+  smart-boundary feature; the docstring contract ("contents up to the
+  cursor position are sent") is preserved either way since
+  =gptel--at-word-end= already extends beyond raw point.
+- Sending a half-sentence can degrade LLM output: the model treats
+  ="The dog looked"= as a complete statement and may infer the wrong
+  intent.
+- The fix is one well-localized macro/call site
+  (=gptel--at-word-end=); the change is small and surgical.
+- Non-Latin scripts and programming-language buffers may have weaker
+  notions of "sentence".  =forward-sentence= honours
+  =sentence-end-double-space=, =sentence-end-base=, and the syntax
+  table, so it adapts to the major mode; but in code buffers the
+  result may be surprising (e.g. extending into a comment paragraph).
+- The user has decided this should be *option-based, defaulting to
+  end-of-sentence behaviour*.
+
+*** Decisions
+- *Default behaviour changes to end-of-sentence.*  No compat toggle to
+  preserve the old word-end behaviour as the default (project rule:
+  "if new feature replaces old one, no toggle, no compat layer" —
+  but this case warrants user choice because of programming-mode
+  caveats, so the option exists).
+- *Single user option* (=defcustom=) controls the prompt-boundary
+  strategy.  Proposed name: =gptel-prompt-boundary= (defaults to
+  ='sentence=).  Values:
+  - ='sentence= (default) — extend point to end of current sentence
+    via =forward-sentence=.
+  - ='word= — current behaviour: =skip-syntax-forward "w."=
+    (evil-mode-friendly).
+  - ='paragraph= — extend to end of current paragraph via
+    =forward-paragraph=.
+  - ='point= — strict raw point, no extension.  Useful for code
+    buffers and users who want zero magic.
+- *Implementation site:* modify =gptel--at-word-end= in
+  =~/gptel/gptel-request.el=.  Rename to =gptel--at-prompt-end= (the
+  old name is misleading once it dispatches on the option) and update
+  the two call sites (=gptel-request.el:2181=, =:2189=).  Keep the
+  macro shape (=save-excursion= + body) so call sites stay one-liners.
+- *Evil-mode compatibility:* the ='sentence= and ='paragraph=
+  branches already advance past the current word, so they subsume the
+  evil-mode workaround.  ='word= remains available for users who
+  specifically want the old behaviour.  ='point= will misbehave under
+  evil normal state (off-by-one); document this in the defcustom
+  docstring.
+- *Region behaviour unchanged:* when =(use-region-p)= is true, the
+  region delimits the prompt exactly; the option does not apply.
+  Verified in current code (=gptel-request.el= region branch does not
+  call =gptel--at-word-end=).
+- *Scope:* this is a small upstream change.  No siro-orga
+  intervention required.  The change is independent of the
+  buffer-copy cleanup work
+  ([[file:gptel.org::*Replace buffer-copy prompt pipeline with heading-state parser (org-mode)][parent AI-DO]]) — it affects only the computation of
+  =prompt-end=, which both pipelines consume.
+
+*** Mission
+Replace the hard-coded word-boundary extension in =gptel--at-word-end=
+with a defcustom-driven dispatch, defaulting to end-of-sentence so
+=gptel-send= invoked mid-sentence sends the complete sentence the user
+just typed.  Preserve =word= as an opt-in for evil-mode users and add
+=paragraph= / =point= as additional strategies.
+
+*** TODOs
+**** AI-DO Add =gptqeql-prompt-boundary= defcustom
+- Add to =~/gptel/gptel.el= near other prompt-related defcustoms
+  (search for =gptel-prompt-prefix-alist= as anchor).
+- Type: =(choice (const :tag "End of sentence" sentence)
+                 (const :tag "End of word (evil-mode friendly)" word)
+                 (const :tag "End of paragraph" paragraph)
+                 (const :tag "Strict point" point))=
+- Default: ='sentence=.
+- Docstring covers each value, notes evil-mode caveat for ='point=,
+  notes region usage bypasses the option.
+
+**** AI-DO Rename =gptel--at-word-end= → =gptel--at-prompt-end= and dispatch on the option
+- Modify =~/gptel/gptel-request.el:1037=.
+- New body branches on =gptel-prompt-boundary=:
+  - ='sentence= → =(ignore-errors (forward-sentence))= followed by
+    =(skip-syntax-backward " ")= to drop trailing whitespace the
+    sentence-end may have included.  Use =ignore-errors= because
+    =forward-sentence= signals at =point-max=.
+  - ='word= → existing =(skip-syntax-forward "w.")=.
+  - ='paragraph= → =(ignore-errors (forward-paragraph))= +
+    =(skip-syntax-backward " ")=.
+  - ='point= → no movement.
+- Keep =save-excursion= wrapper so call sites are unaffected.
+- Update both call sites at =gptel-request.el:2181= and =:2189= to
+  use the new name.
+
+**** AI-DO Update inline comment / docstring at call sites
+- The comment =; Send text up to end of word (for evil-mode users)=
+  (around =gptel-request.el:2188=) becomes stale.  Replace with a
+  reference to =gptel-prompt-boundary=.
+
+**** AI-DO Tests
+- Add tests under the gptel test infrastructure (see sibling AI-DO
+  [[file:gptel.org::*Set up gptel test infrastructure and add buffer-preference tests][Set up gptel test infrastructure]]; if that hasn't landed yet, file
+  these tests alongside it or in =~/siro-orga/test/=).
+- Cases (one fixture per boundary strategy):
+  - ='sentence=: point mid-sentence → prompt extends to sentence end.
+  - ='sentence=: point at end of buffer → no extension, no error.
+  - ='sentence=: point at end of last sentence (no trailing
+    punctuation) → behaviour documented (probably stays at point).
+  - ='word=: existing behaviour preserved (regression guard).
+  - ='paragraph=: point mid-paragraph → extends to paragraph end.
+  - ='point=: raw point, no extension.
+  - Region active: option ignored regardless of value.
+
+**** AI-DO Document in =gptel.org= MUST READ / user-facing docs
+- Mention the new defcustom in the appropriate user-facing section
+  of =gptel.org= (or upstream README if applicable for this fork).
+- Note the behaviour change vs. upstream karthink/gptel — this is a
+  fork-divergence; explicit user approval already given via this TODO.
+
+*** Out of scope
+- Re-thinking the broader prompt-construction pipeline (covered by
+  [[file:gptel.org::*Replace buffer-copy prompt pipeline with heading-state parser (org-mode)][parent AI-DO]]).
+- Smart "sentence" detection in code buffers beyond what
+  =forward-sentence= + buffer syntax table provides.
+
+*** Key file references
+| Concern                              | File:Line                        |
+|--------------------------------------+----------------------------------|
+| =gptel-send= entry point             | =~/gptel/gptel.el::1674=         |
+| =gptel-request= (computes bounds)    | =~/gptel/gptel-request.el::2176-2189= |
+| =gptel--at-word-end= macro           | =~/gptel/gptel-request.el::1037= |
+| Evil-mode workaround comment         | =~/gptel/gptel-request.el::2188= |
+| Org-mode prompt path                 | =~/gptel/gptel-org.el::226=      |
