@@ -225,6 +225,40 @@ is only inserted in dedicated gptel buffers before the AI's response."
 Also inserted before and after non-consecutive tool calls."
   :type 'string)
 
+(defcustom gptel-prompt-boundary 'sentence
+  "Strategy for extending the prompt end past point when sending.
+
+When `gptel-send' is invoked with no active region, the prompt is
+constructed from the buffer up to a position derived from point.
+This option controls how that position is computed.
+
+Possible values:
+
+  `sentence'  (default) — extend point to the end of the current
+              sentence via `forward-sentence'.  This avoids
+              silently truncating a sentence the user just typed
+              when point is left mid-sentence.
+
+  `word'      extend point past word-constituent and punctuation
+              characters via (skip-syntax-forward \"w.\").  This is
+              the historical behaviour and is friendly to evil-mode
+              normal state, where point sits on a character rather
+              than after it.
+
+  `paragraph' extend point to the end of the current paragraph via
+              `forward-paragraph'.
+
+  `point'     use raw point with no extension.  Note: under
+              evil-mode normal state this is off-by-one (the
+              character under point is not included).
+
+When the region is active, this option is ignored: the region
+delimits the prompt exactly."
+  :type '(choice (const :tag "End of sentence" sentence)
+                 (const :tag "End of word (evil-mode friendly)" word)
+                 (const :tag "End of paragraph" paragraph)
+                 (const :tag "Strict point" point)))
+
 ;; Model and interaction parameters
 (defcustom gptel-directives
   '((default     . "You are a large language model living in Emacs and a helpful assistant. Respond concisely.")
@@ -1034,10 +1068,54 @@ MODE-SYM is typically a major-mode symbol."
   (declare (side-effect-free t))
   (or (alist-get major-mode gptel-response-prefix-alist) ""))
 
-(defmacro gptel--at-word-end (&rest body)
-  "Execute BODY at end of the current word or punctuation."
+(defun gptel--sentence-end-position ()
+  "Return position of the end of the sentence at point.
+Recognizes single-space sentence boundaries regardless of the
+ambient `sentence-end-double-space' setting.  Bounded to the
+current paragraph: if no sentence end is found before
+paragraph-end, returns paragraph-end.  Safe at end of buffer."
+  (save-excursion
+    (let ((par-end (save-excursion
+                     (ignore-errors (forward-paragraph))
+                     (skip-chars-backward " \t\n")
+                     (point))))
+      (cond
+       ((>= (point) par-end) (point))
+       ;; Single-space-tolerant sentence-end regex: terminator
+       ;; punctuation possibly followed by closing brackets/quotes,
+       ;; then a space, tab, newline, or end-of-buffer.
+       ((re-search-forward
+         (rx (any ".?!…‽")
+             (zero-or-more (any "]\"')}»›"))
+             (or eos (any " \t\n")))
+         par-end t)
+        ;; Land just past the punctuation cluster, not on the
+        ;; trailing whitespace.
+        (goto-char (match-end 0))
+        (skip-chars-backward " \t\n")
+        (point))
+       ;; No sentence terminator in paragraph — fall back to par-end.
+       (t par-end)))))
+
+(defmacro gptel--at-prompt-end (&rest body)
+  "Execute BODY at the prompt-end position determined by `gptel-prompt-boundary'.
+
+`gptel-prompt-boundary' selects one of: `sentence' (end of
+current sentence), `word' (skip word + punctuation; historical
+behaviour), `paragraph' (end of current paragraph), or `point'
+(no extension).  Original point is restored on exit via
+`save-excursion'."
   `(save-excursion
-     (skip-syntax-forward "w.")
+     (goto-char
+      (pcase gptel-prompt-boundary
+        ('sentence  (gptel--sentence-end-position))
+        ('word      (save-excursion (skip-syntax-forward "w.") (point)))
+        ('paragraph (save-excursion
+                      (ignore-errors (forward-paragraph))
+                      (skip-chars-backward " \t\n")
+                      (point)))
+        ('point     (point))
+        (_          (gptel--sentence-end-position))))
      ,(macroexp-progn body)))
 
 ;; NOTE: Remove after we drop Emacs 27.1 (#724)
@@ -2178,15 +2256,15 @@ be used to rerun or continue the request at a later time."
            ((null position)
             (if (use-region-p)
                 (set-marker (make-marker) (region-end))
-              (gptel--at-word-end (point-marker))))
+              (gptel--at-prompt-end (point-marker))))
            ((markerp position) position)
            ((integerp position)
             (set-marker (make-marker) position buffer))))
          (gptel--schema schema)
          (prompt-buffer
           (cond                       ;prompt from buffer or explicitly supplied
-           ((null prompt)           ;Send text up to end of word (for evil-mode users)
-            (gptel--create-prompt-buffer (gptel--at-word-end (point))))
+           ((null prompt)           ;Send text up to the prompt boundary (see `gptel-prompt-boundary')
+            (gptel--create-prompt-buffer (gptel--at-prompt-end (point))))
            ((stringp prompt)
             (gptel--with-buffer-copy buffer nil nil
               (insert prompt)
