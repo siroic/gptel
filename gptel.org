@@ -1503,3 +1503,120 @@ References: prior revert commits =~/gptel/4324642= and
 | =gptel--at-word-end= macro           | =~/gptel/gptel-request.el::1037= |
 | Evil-mode workaround comment         | =~/gptel/gptel-request.el::2188= |
 | Org-mode prompt path                 | =~/gptel/gptel-org.el::226=      |
+** AI-DO Prompt boundary: handle unfinished input with following paragraphs
+*** Origin
+Follow-up to [[*Extend prompt boundary to end-of-sentence (configurable)][Extend prompt boundary to end-of-sentence (configurable)]]
+(=AI-DONE=).  The corrected =sentence= implementation passes its
+integration tests but still fails in a common real-world scenario.
+
+Reproducer (org-mode buffer):
+
+#+begin_example
+* what is
+
+* 3+3+5
+#+end_example
+
+User places point after the word =is= on line 1 (=what is|=) and
+calls =gptel-send=.  Result: prompt sent is =what is= (truncated
+at word).  Expected: =what is 3+3+5= (or at least something that
+reaches the answer the user was building toward).
+
+*** Discussion highlights
+- =gptel--sentence-end-position= search range is bounded to
+  =par-end= via =(save-excursion (forward-paragraph) (skip-chars-backward
+  " \t\n") (point))=.  For the buffer above, point is at the end
+  of the =what is= line; =forward-paragraph= leaves point at the
+  same line (the paragraph =what is= is a single line followed by
+  a blank line); =par-end= = =(point)=.  The regex search range
+  is empty.  No sentence terminator found → falls through to
+  =par-end= → returns =(point)= → prompt truncated at =what is=.
+- This is /structurally/ the same failure mode as the original
+  (no extension beyond word/point), reached via a different code
+  path: not =forward-sentence='s bad regex, but the
+  paragraph-bound search range being empty.
+- The user's mental model: "send what I just typed up to the
+  natural end" — but the natural end is buried in a /following/
+  paragraph because the user split the question across paragraphs
+  (deliberately or because of org-mode line wrapping or visual
+  separators).
+- The =word= fallback would also fail here (=skip-syntax-forward
+  "w."= from after =is= goes nowhere — already past the word).
+- The =paragraph= setting would also fail here for the same
+  reason (=forward-paragraph= from inside =what is= goes to the
+  end of that one-line paragraph).
+
+*** Decisions
+TBD — present options for the user to pick.
+
+*** Options
+,**** A. Extend to end-of-heading (or end-of-buffer) on unfinished sentence
+When =sentence= fails to find a terminator within the current
+paragraph, fall back to *the end of the current org heading
+subtree* (or =point-max= in non-org buffers).  Rationale: the
+user invoked =gptel-send= without a region — the implicit intent
+is "send everything in this conversation context up to a sensible
+boundary".  If the immediate sentence isn't complete, the
+sensible boundary is the broader conversational unit.
+
+Pros: matches mental model; no truncation; handles the
+multi-paragraph unfinished-question case.
+Cons: in long buffers with much text /below/ point, sends much
+more than the user expected.  Mitigated in org-mode because
+=gptel-org--create-prompt-buffer= already has a
+heading-subtree boundary concept (=gptel-org-branching-context=).
+
+,**** B. Extend across paragraph boundaries until a terminator OR =N= paragraphs
+Like A but capped: extend search across up to /N/ paragraphs
+(=defcustom=, default 1 or 2).  Stop at the first terminator.
+
+Pros: avoids "send entire buffer".  Cons: yet another knob;
+choice of /N/ is arbitrary.
+
+,**** C. Extend to end-of-buffer in /all/ unfinished cases
+Simplest: if no terminator found anywhere from point to
+=point-max=, return =point-max=.  Don't bound by paragraph.
+
+Pros: zero new config; trivial.  Cons: in code buffers with
+prose comments, can grab unrelated content.  But the user
+already opts in via =gptel-prompt-boundary='sentence=, so this
+is acceptable.
+
+,**** D. Document as known limitation; require user to add terminator
+Leave the implementation as-is.  Document: "if your prompt spans
+multiple paragraphs without a terminator, add a =?= or end the
+prompt with a complete sentence."
+
+Pros: zero code change.  Cons: this is exactly the friction the
+feature was meant to remove.
+
+,**** E. Treat point-at-end-of-paragraph specially
+When point is at end of a paragraph (no trailing chars on the
+line beyond point) AND there's no terminator in the current
+paragraph, /also/ search the next paragraph(s).  Essentially A or
+C but only triggered for the end-of-paragraph case (which is the
+"user split the prompt across paragraphs" pattern).
+
+Pros: targeted; doesn't change behavior for mid-paragraph point.
+Cons: harder to explain.
+
+*** Mission
+Decide which option (or hybrid) to implement; add integration
+tests that cover the reproducer above /before/ implementing the
+fix; ship a corrected =gptel--sentence-end-position= (or
+companion logic in =gptel--at-prompt-end=).
+
+*** Out of scope
+- Re-thinking =gptel-prompt-boundary= itself.  This is a fix to
+  the =sentence= strategy, not a redesign.
+- Org-mode element-aware sentence detection (e.g. treat list
+  items, table cells, code blocks specifically).  Future TODO if
+  needed.
+
+*** Key file references
+| Concern                                  | File:Line                              |
+|------------------------------------------+----------------------------------------|
+| =gptel--sentence-end-position= helper    | =~/gptel/gptel-request.el::1037-area=  |
+| =gptel--at-prompt-end= macro             | =~/gptel/gptel-request.el::1037-area=  |
+| Integration test file                    | =~/siro-orga/test/gptel-prompt-boundary-test.el= |
+| Predecessor TODO                         | [[*Extend prompt boundary to end-of-sentence (configurable)][Extend prompt boundary to end-of-sentence]] |
