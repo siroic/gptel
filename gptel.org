@@ -1618,7 +1618,7 @@ companion logic in =gptel--at-prompt-end=).
 | =gptel--at-prompt-end= macro             | =~/gptel/gptel-request.el::1037-area=  |
 | Integration test file                    | =~/siro-orga/test/gptel-prompt-boundary-test.el= |
 | Predecessor TODO                         | [[*Extend prompt boundary to end-of-sentence (configurable)][Extend prompt boundary to end-of-sentence]] |
-** TODO Resolve =gptel-org.el= conflict merging =origin/master= into =orga=
+** AI-DONE Resolve =gptel-org.el= conflict merging =origin/master= into =orga=
 *** Origin
 Workspace task in =~/siro-orga/siro-orga.org=: "Merge origin/master
 of gptel and gptel-agent" (run on the assistant by the user).  The
@@ -1727,3 +1727,11 @@ github.com:karthink/gptel into orga"= (matches the precedent
 - Refactoring =gptel-org--send-with-props= toward upstream's
   =seq-mapn= shape — that is a follow-up cleanup, not part of this
   merge.
+
+*** Outcomes
+- Merge commit: =ed3c33c= (=Merge remote-tracking branch 'origin/master' into orga=).
+- Conflict in =gptel-org.el= resolved per plan: kept orga's preset-aware =pcase-let*= block; renamed all 5 =gptel--system-message= references to =gptel-system-prompt= (defvar at L37, pcase clause inside =gptel--apply-preset= lambda, local =let= binding in the priority chain, =setq-local= in =gptel-org--restore-state=, =gptel--parse-directive= call in =gptel-org-set-properties=).
+- bd2419a's =(require 'gptel)= insert auto-merged into =gptel-org-set-properties= interactive body (verified at L647).
+- Residual =gptel--system-message= references: only 3, all intentional and matching upstream — =define-obsolete-variable-alias= + =safe-local-variable= in =gptel-request.el= (L290, L292), and =delete-file-local-variable= cleanup in =gptel.el= (L802).  =git grep gptel--system-message -- '*.el'= matches upstream exactly.
+- Test suite (=make -C test test=): pre-existing failure unrelated to this merge.  Same failure reproduces on pre-merge =02078ff=: =invalid-slot-name :environment= on =transient-prefix= during load of =gptel-transient.el=.  Cause: system =transient= package is too old for the =:environment= slot used by both orga and upstream.  Out of scope for this TODO; track separately if needed.
+- Pushed: =gitea/orga= advanced =02078ff..ed3c33c=.
