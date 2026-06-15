@@ -1512,9 +1512,7 @@ integration tests but still fails in a common real-world scenario.
 Reproducer (org-mode buffer):
 
 #+begin_example
-* what is
-
-* 3+3+5
+,* 3+3+5
 #+end_example
 
 User places point after the word =is= on line 1 (=what is|=) and
