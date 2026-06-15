@@ -1620,3 +1620,112 @@ companion logic in =gptel--at-prompt-end=).
 | =gptel--at-prompt-end= macro             | =~/gptel/gptel-request.el::1037-area=  |
 | Integration test file                    | =~/siro-orga/test/gptel-prompt-boundary-test.el= |
 | Predecessor TODO                         | [[*Extend prompt boundary to end-of-sentence (configurable)][Extend prompt boundary to end-of-sentence]] |
+** TODO Resolve =gptel-org.el= conflict merging =origin/master= into =orga=
+*** Origin
+Workspace task in =~/siro-orga/siro-orga.org=: "Merge origin/master
+of gptel and gptel-agent" (run on the assistant by the user).  The
+=gptel-agent= side merged cleanly (merge commit =cddd4ce= against
+single upstream commit =2853a57=).  =gptel= side aborted with a
+conflict in =gptel-org.el= per the pull-first conflict policy
+(non-trivial → abort and surface, do not guess).
+
+State at abort: =~/gptel= is on =orga=, working tree clean, no
+merge in progress.  Merge-base with =origin/master= is =f342b30=.
+
+*** Discussion highlights
+**** What each side changed
+- =orga= touched =gptel-org.el= in 4 commits (=85 lines churn=),
+  notably =bf867c3 gptel-org: Honor GPTEL_PRESET backend/model in
+  send-with-props= which added a preset-aware =pcase-let*= block in
+  =gptel-org--call-at-point= that:
+  1. reads org-entry properties (=org-preset=, =org-system=,
+     =org-backend=, =org-model=, …);
+  2. if =org-preset= is set, expands it via =gptel--apply-preset=
+     with a lambda that destructures each affected gptel-* var;
+  3. merges with =(or org-val preset-val gptel-val)= priority chain
+     into local bindings for the call.
+- =origin/master= touched the same file in 2 commits (=11 lines
+  churn=):
+  - =c35b7d8 gptel: Rename gptel--system-message to
+    gptel-system-prompt= — *codebase-wide rename*; in this hunk it
+    replaces =gptel--system-message= with =gptel-system-prompt= in
+    the local binding list.
+  - =bd2419a gptel-org: Lazy-load gptel in set-properties (#1371)=
+    — unrelated, lazy-load fix in a different region (may or may
+    not be inside the conflict region; needs verification).
+- The full upstream rewrite of this block replaces the explicit
+  priority chain with =seq-mapn= zipping
+  =(gptel-org--entry-properties)= against the buffer defaults using
+  =(or a b)=.  *Upstream's simpler form has no preset support* —
+  it does not call =gptel--apply-preset= at all.
+
+**** Why the conflict is non-trivial
+- Both sides rewrite *the same =pcase-let= block* in mutually
+  incompatible ways.
+- Their rewrites have *different feature sets*: orga adds preset
+  expansion; upstream does the variable rename and simplifies the
+  merge logic but drops the preset support entirely (or relies on
+  preset being applied elsewhere — needs checking).
+- A correct resolution must:
+  1. keep orga's preset-aware logic (it is a deliberate feature,
+     see [[*Apply GPTEL_PRESET to backend/model in =gptel-org--send-with-props=][AI-DONE Apply GPTEL_PRESET …]]);
+  2. rename the local binding =gptel--system-message= →
+     =gptel-system-prompt= so it matches the new variable name; AND
+  3. rename the =pcase= clause inside =gptel--apply-preset='s
+     lambda — ='gptel--system-message= → ='gptel-system-prompt=.
+- The rename is *not local to =gptel-org.el=*.  Upstream's =c35b7d8=
+  renames =gptel--system-message= → =gptel-system-prompt= across
+  ~12 files.  All of orga's other code (e.g. the four new commits in
+  =orga= that reference =gptel--system-message= directly or
+  indirectly) must be reviewed to confirm the rename applies cleanly
+  to them too, even though git auto-merged those files.
+- Verified: =git grep -l gptel--system-message= in =orga= currently
+  returns hits in =gptel-anthropic.el=, =gptel-bedrock.el=,
+  =gptel-context.el=, =gptel-gemini.el=, =gptel-ollama.el=,
+  =gptel-openai-extras.el=, =gptel-openai-responses.el=,
+  =gptel-openai.el=, =gptel-org.el=, =gptel-request.el=,
+  =gptel-transient.el=, =gptel.el=.  Upstream's rename presumably
+  updates all of these; we need to confirm post-merge that no
+  =gptel--system-message= references survive.
+
+*** Mission
+Land =origin/master= on =orga= as a clean merge commit, preserving
+the GPTEL_PRESET feature in =gptel-org--send-with-props= while
+adopting upstream's =gptel-system-prompt= name (and any other
+rename consequences).  Post-merge the test suite (=make -C test
+test=) and an interactive sanity check of =gptel-org--send-with-props=
+with a GPTEL_PRESET drawer must pass.
+
+*** TODOs
+**** AI-DO Inspect the full =bd2419a= hunk
+Confirm whether =gptel-org: Lazy-load gptel in set-properties (#1371)=
+touches the same =pcase-let*= region or a separate region.  If
+separate, it should auto-merge cleanly and only =c35b7d8= matters
+for conflict resolution.
+**** AI-DO Resolve =gptel-org.el= conflict by hand
+Keep orga's preset-aware =pcase-let*= block; rename
+=gptel--system-message= → =gptel-system-prompt= in both
+- the local =or= binding chain, and
+- the =pcase= clause inside the =gptel--apply-preset= lambda
+  (='gptel--system-message= → ='gptel-system-prompt=).
+Reapply any non-overlapping upstream changes from the same hunk
+(if =bd2419a= touched nearby lines).
+**** AI-DO Audit residual =gptel--system-message= references
+After resolution, =git grep gptel--system-message= must return no
+hits in =~/gptel= (assuming upstream's rename was complete).  If
+any survive, decide per-occurrence whether they need renaming or
+are legitimate references to something else.
+**** AI-DO Run the test suite
+=make -C test test 2>&1 | tail -30=.  Any failures → delegate to
+=verifier= with synthesized context, do not iterate inline.
+**** AI-DO Commit the merge
+Standard merge commit message ="Merge branch 'master' of
+github.com:karthink/gptel into orga"= (matches the precedent
+=cd4f178=).  Then push to =gitea/orga=.
+
+*** Out of scope
+- Resolving any non-conflict differences between orga and upstream
+  in unrelated files (already auto-merged by git).
+- Refactoring =gptel-org--send-with-props= toward upstream's
+  =seq-mapn= shape — that is a follow-up cleanup, not part of this
+  merge.
