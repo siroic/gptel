@@ -84,8 +84,8 @@ back to the LLM)."
   (let ((base-request-data
          (nconc
           `(:messages [,@prompts] :inferenceConfig (:maxTokens ,(or gptel-max-tokens 500)))
-          (when gptel--system-message
-            `(:system [(:text ,gptel--system-message)
+          (when gptel-system-prompt
+            `(:system [(:text ,gptel-system-prompt)
                        ,@(when (or (eq gptel-cache t) (memq 'system gptel-cache))
                            '((:cachePoint (:type "default"))))]))
           (when gptel-temperature `(:temperature ,gptel-temperature))
@@ -643,6 +643,7 @@ Convenient to use with `cl-multiple-value-bind'"
   '((claude-sonnet-4-6           . "anthropic.claude-sonnet-4-6")
     (claude-opus-4-6             . "anthropic.claude-opus-4-6-v1")
     (claude-opus-4-7             . "anthropic.claude-opus-4-7")
+    (claude-opus-4-8             . "anthropic.claude-opus-4-8")
     (claude-sonnet-4-5-20250929  . "anthropic.claude-sonnet-4-5-20250929-v1:0")
     (claude-haiku-4-5-20251001   . "anthropic.claude-haiku-4-5-20251001-v1:0")
 	(claude-opus-4-5-20251101    . "anthropic.claude-opus-4-5-20251101-v1:0")

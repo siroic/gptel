@@ -34,7 +34,7 @@
 (defvar org-entry-property-inherited-from)
 (defvar gptel-backend)
 (defvar gptel--known-backends)
-(defvar gptel--system-message)
+(defvar gptel-system-prompt)
 (defvar gptel-model)
 (defvar gptel-temperature)
 (defvar gptel-max-tokens)
@@ -530,7 +530,7 @@ ARGS are the original function call arguments."
                    org-preset
                    (lambda (sym val)
                      (pcase sym
-                       ('gptel--system-message       (setq p-system val))
+                       ('gptel-system-prompt         (setq p-system val))
                        ('gptel-backend               (setq p-backend val))
                        ('gptel-model                 (setq p-model val))
                        ('gptel-temperature           (setq p-temperature val))
@@ -541,7 +541,7 @@ ARGS are the original function call arguments."
                         p-temperature p-tokens p-num p-tools))
               (list nil nil nil nil nil nil nil)))
            (gptel--preset         (or org-preset      gptel--preset))
-           (gptel--system-message (or org-system      preset-system      gptel--system-message))
+           (gptel-system-prompt   (or org-system      preset-system      gptel-system-prompt))
            (gptel-backend         (or org-backend     preset-backend     gptel-backend))
            (gptel-model           (or org-model       preset-model       gptel-model))
            (gptel-temperature     (or org-temperature preset-temperature gptel-temperature))
@@ -612,7 +612,7 @@ ARGS are the original function call arguments."
                  '(gptel presets)
                  (format "Could not activate gptel preset `%s' in buffer \"%s\""
                          preset (buffer-name)))))
-            (when system (setq-local gptel--system-message system))
+            (when system (setq-local gptel-system-prompt system))
             (if backend (setq-local gptel-backend backend)
               (message
                (substitute-command-keys
@@ -644,6 +644,7 @@ gptel model and backend names, the system message, active tools, the
 response temperature, max tokens and number of conversation turns to
 send in queries.  (See `gptel--num-messages-to-send' for the last one.)"
   (interactive (list (point) t))
+  (require 'gptel)
   (let ((preset-spec (and gptel--preset (gptel-get-preset gptel--preset))))
     (if preset-spec
         (org-entry-put pt "GPTEL_PRESET" (gptel--to-string gptel--preset))
@@ -661,7 +662,7 @@ send in queries.  (See `gptel--num-messages-to-send' for the last one.)"
     (if (gptel--preset-mismatch-value preset-spec :backend gptel-backend)
         (org-entry-put pt "GPTEL_BACKEND" (gptel-backend-name gptel-backend)))
     ;; System message
-    (let ((parsed (car-safe (gptel--parse-directive gptel--system-message))))
+    (let ((parsed (car-safe (gptel--parse-directive gptel-system-prompt))))
       (if (gptel--preset-mismatch-value preset-spec :system parsed)
           (when parsed
             (org-entry-put pt "GPTEL_SYSTEM" (string-replace "\n" "\\n" parsed)))
