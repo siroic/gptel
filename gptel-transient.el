@@ -1698,7 +1698,7 @@ This sets the variable `gptel-include-tool-results', which see."
                                                  'gptel)
                           t))
                        (point))
-                     (gptel--at-prompt-end (point))))))
+                     (gptel--at-word-end (point))))))
              (gptel-buffer (get-buffer gptel-buffer-name))
              (gptel-buffer-mode
               (if (buffer-live-p gptel-buffer)
