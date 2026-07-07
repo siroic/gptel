@@ -1448,17 +1448,18 @@ No state transition here since that's handled by the process sentinels."
           (gptel--update-token-usage (plist-get info :tokens)
                                      (plist-get info :tokens-full)))))
     ;; Run hook in visible window to set window-point, BUG #269
-    (if-let* ((gptel-window (get-buffer-window gptel-buffer 'visible)))
-        (with-selected-window gptel-window
-          (mapc (lambda (f) (funcall f info)) (plist-get info :post))
-          (run-hook-with-args
-           'gptel-post-response-functions
-           (marker-position start-marker) (marker-position tracking-marker)))
-      (with-current-buffer gptel-buffer
-        (mapc (lambda (f) (funcall f info)) (plist-get info :post))
-        (run-hook-with-args
-         'gptel-post-response-functions
-         (marker-position start-marker) (marker-position tracking-marker))))))
+    (when (buffer-live-p gptel-buffer)
+      (let ((start-pos (and (markerp start-marker) (marker-position start-marker)))
+            (end-pos   (and (markerp tracking-marker) (marker-position tracking-marker))))
+        (if-let* ((gptel-window (get-buffer-window gptel-buffer 'visible)))
+            (with-selected-window gptel-window
+              (mapc (lambda (f) (funcall f info)) (plist-get info :post))
+              (when (and start-pos end-pos)
+                (run-hook-with-args 'gptel-post-response-functions start-pos end-pos)))
+          (with-current-buffer gptel-buffer
+            (mapc (lambda (f) (funcall f info)) (plist-get info :post))
+            (when (and start-pos end-pos)
+              (run-hook-with-args 'gptel-post-response-functions start-pos end-pos))))))))
 
 (defun gptel--handle-error (fsm)
   "Check for errors in request state FSM.
@@ -1482,17 +1483,18 @@ Perform UI updates and run post-response hooks."
         (when-let* ((error-msg (plist-get error-data :message)))
           (message "%s error: (%s) %s" backend-name status
                    (string-trim (gptel--to-string error-msg)))))
-      (if-let* ((gptel-window (get-buffer-window gptel-buffer 'visible)))
-          (with-selected-window gptel-window
+      ;; Run hook in visible window to set window-point, BUG #269
+      (let ((start-pos (and (markerp start-marker) (marker-position start-marker)))
+            (end-pos   (and (markerp tracking-marker) (marker-position tracking-marker))))
+        (if-let* ((gptel-window (get-buffer-window gptel-buffer 'visible)))
+            (with-selected-window gptel-window
+              (mapc (lambda (f) (funcall f info)) (plist-get info :post))
+              (when (and start-pos end-pos)
+                (run-hook-with-args 'gptel-post-response-functions start-pos end-pos)))
+          (with-current-buffer gptel-buffer
             (mapc (lambda (f) (funcall f info)) (plist-get info :post))
-            (run-hook-with-args
-             'gptel-post-response-functions
-             (marker-position start-marker) (marker-position tracking-marker)))
-        (with-current-buffer gptel-buffer
-          (mapc (lambda (f) (funcall f info)) (plist-get info :post))
-          (run-hook-with-args
-           'gptel-post-response-functions
-           (marker-position start-marker) (marker-position tracking-marker))))
+            (when (and start-pos end-pos)
+              (run-hook-with-args 'gptel-post-response-functions start-pos end-pos)))))
       (with-current-buffer gptel-buffer
         (when gptel-mode
           (gptel--update-status (format " Error: %s" status) 'error)
@@ -1506,17 +1508,18 @@ Perform UI updates and run post-response hooks."
               (start-marker (plist-get info :position))
               (tracking-marker (or (plist-get info :tracking-marker)
                                    start-marker)))
-    (if-let* ((gptel-window (get-buffer-window gptel-buffer 'visible)))
-        (with-selected-window gptel-window
+    ;; Run hook in visible window to set window-point, BUG #269
+    (let ((start-pos (and (markerp start-marker) (marker-position start-marker)))
+          (end-pos   (and (markerp tracking-marker) (marker-position tracking-marker))))
+      (if-let* ((gptel-window (get-buffer-window gptel-buffer 'visible)))
+          (with-selected-window gptel-window
+            (mapc (lambda (f) (funcall f info)) (plist-get info :post))
+            (when (and start-pos end-pos)
+              (run-hook-with-args 'gptel-post-response-functions start-pos end-pos)))
+        (with-current-buffer gptel-buffer
           (mapc (lambda (f) (funcall f info)) (plist-get info :post))
-          (run-hook-with-args
-           'gptel-post-response-functions
-           (marker-position start-marker) (marker-position tracking-marker)))
-      (with-current-buffer gptel-buffer
-        (mapc (lambda (f) (funcall f info)) (plist-get info :post))
-        (run-hook-with-args
-         'gptel-post-response-functions
-         (marker-position start-marker) (marker-position tracking-marker))))
+          (when (and start-pos end-pos)
+            (run-hook-with-args 'gptel-post-response-functions start-pos end-pos)))))
     (with-current-buffer gptel-buffer
       (when gptel-mode
         (gptel--update-status  " Abort" 'error)
