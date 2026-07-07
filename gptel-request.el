@@ -1780,6 +1780,7 @@ BACKEND is the `gptel-backend'."
 
 
 ;;; State machine for driving requests
+(defvar gptel--current-fsm)             ;Defined in gptel.el
 (defvar gptel-request--transitions
   `((INIT . ((t                       . WAIT)))
     (WAIT . ((t                       . TYPE)))
@@ -1862,7 +1863,8 @@ automatically from MACHINE's transition table."
         (plist-get (gptel-fsm-info machine) :history))
   (setf (gptel-fsm-state machine) new-state)
   (when-let* ((handlers (alist-get new-state (gptel-fsm-handlers machine))))
-    (mapc (lambda (h) (funcall h machine)) handlers)))
+    (let ((gptel--current-fsm machine))
+      (mapc (lambda (h) (funcall h machine)) handlers))))
 
 (defun gptel--fsm-next (machine)
   "Determine MACHINE's next state according to its transition table.
@@ -2698,6 +2700,7 @@ the response is inserted into the current buffer after point."
                              (plist-put info :status http-msg)
                              (gptel--fsm-transition fsm) ;WAIT -> TYPE
                              (when error (plist-put info :error error))
+                             (let ((gptel--current-fsm fsm))
                              (when response ;Look for a reasoning block
                                (if (string-match-p "^\\s-*<think>" response)
                                    (when-let* ((idx (string-search "</think>" response)))
@@ -2713,7 +2716,7 @@ the response is inserted into the current buffer after point."
                                    (funcall callback (cons 'reasoning reasoning) info))))
                              (when (or response (not (member http-status '("200" "100"))))
                                (with-demoted-errors "gptel callback error: %S"
-                                 (funcall callback response info)))
+                                 (funcall callback response info))))
                              (gptel--fsm-transition fsm) ;TYPE -> next
                              (setf (alist-get buf gptel--request-alist nil 'remove) nil)
                              (kill-buffer buf)))
@@ -2956,7 +2959,8 @@ PROCESS and _STATUS are process parameters."
            (info (gptel-fsm-info fsm))
            (http-status (plist-get info :http-status)))
       (when gptel-log-level (gptel-curl--log-response proc-buf info)) ;logging
-      (cond
+      (let ((gptel--current-fsm fsm))
+       (cond
        ;; Curl exited with a non-zero status: connection-level failure
        ((not (zerop exit-status))
         ;; MAYBE: This transition should happen in the process filter, but it's
@@ -2991,7 +2995,7 @@ PROCESS and _STATUS are process parameters."
                 (plist-put info :error "Malformed JSON in response."))
                (t (plist-put info :error "Could not parse HTTP response."))))))
         (with-demoted-errors "gptel callback error: %S"
-          (funcall (plist-get info :callback) nil info))))
+          (funcall (plist-get info :callback) nil info)))))
       (gptel--fsm-transition fsm))      ; Move to next state
     (setf (alist-get process gptel--request-alist nil 'remove) nil)
     (kill-buffer proc-buf)))
@@ -3030,7 +3034,8 @@ PROCESS and _STATUS are process parameters."
         (when (member http-status '("200" "100"))
           (let ((response (gptel-curl--parse-stream
                            (plist-get proc-info :backend) proc-info))
-                (reasoning-block (plist-get proc-info :reasoning-block)))
+                (reasoning-block (plist-get proc-info :reasoning-block))
+                (gptel--current-fsm fsm))
             ;; Depending on the API, there are two modes that reasoning or
             ;; chain-of-thought content appears: as part of the main response
             ;; but surrounded by <think>...</think> tags, or as a separate

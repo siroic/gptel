@@ -430,6 +430,24 @@ transient menu interface provided by `gptel-menu'."
   :type 'file
   :group 'gptel)
 
+(defvar gptel--current-fsm nil
+  "The gptel FSM (`gptel-fsm') of the request currently being processed.
+
+Dynamically bound around FSM state-handler dispatch and around the
+asynchronous response-insertion callbacks (the curl process filter,
+the curl sentinel, and the `url-retrieve' completion callback), so
+that mid-turn hooks (`gptel-pre-response-hook',
+`gptel-post-stream-hook', the tool-call and reasoning hooks) can
+reach the request's context via `gptel-current-info'.
+
+Nil when no request is being processed.")
+
+(defun gptel-current-info ()
+  "Return the info plist of the request currently being processed.
+This is the `info' of `gptel--current-fsm', or nil if no request is
+in flight.  Intended for use inside mid-turn gptel hooks."
+  (and gptel--current-fsm (gptel-fsm-info gptel--current-fsm)))
+
 (defvar gptel-refresh-buffer-hook '(jit-lock-refontify)
   "Hook run in gptel buffers after changing gptel's configuration.
 
