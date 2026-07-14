@@ -1411,7 +1411,7 @@ just typed.  Preserve =word= as an opt-in for evil-mode users and add
 | =gptel--at-word-end= macro           | =~/gptel/gptel-request.el::1037= |
 | Evil-mode workaround comment         | =~/gptel/gptel-request.el::2188= |
 | Org-mode prompt path                 | =~/gptel/gptel-org.el::226=      |
-** AI-DO Support Anthropic adaptive thinking effort (thinking + output_config)
+** AI-DONE Support Anthropic adaptive thinking effort (thinking + output_config)
 *** Origin
 - Requested in siro-orga discussion (urho): plan how to implement
   Anthropic "thinking effort".  Constraints given:
@@ -1526,11 +1526,45 @@ injection lives only in the Anthropic =gptel--request-data= method).
 3. a
 4. a
 5. a
+**** AI-FEEDBACK Implemented on =orga-stable= per decisions 1a/2b/3a/4a/5a; all phases done
+Implemented on =orga-stable= per decisions 1a/2b/3a/4a/5a; all phases done.
+- Decision 2b honored: non-capable Claude models get =output_config {effort}=
+  only; capable (4.6+) models additionally get
+  =thinking {type adaptive, display summarized}=.
 *** TODOs
 **** phase 1 — gptel (branch =orga=)
-***** AI-DO Add =gptel-thinking-effort= defcustom and =adaptive-thinking= capability flags
-***** AI-DO Inject =thinking= / =output_config= in Anthropic =gptel--request-data=
-***** AI-DO Unit tests for effort injection and non-Anthropic isolation
+***** AI-DONE Add =gptel-thinking-effort= defcustom and =adaptive-thinking= capability flags
+***** AI-DONE Inject =thinking= / =output_config= in Anthropic =gptel--request-data=
+***** AI-DONE Unit tests for effort injection and non-Anthropic isolation
 **** phase 2 — siro-orga presets
-***** AI-DO Add =:thinking-effort:= properties to Claude-backed agent org files
+***** AI-DONE Add =:thinking-effort:= properties to Claude-backed agent org files
+*** Outcomes / Results
+- Landed on branch =orga-stable= (user: "by master branch i mean stable"):
+  gptel commit =3fc204f=; test submodule commit =bbed19f= pushed to
+  =gitea:external/gptel-test.git= branch =orga-stable=.
+- =gptel-anthropic.el=: new =gptel-thinking-effort= defcustom (default nil);
+  =adaptive-thinking= capability on =claude-sonnet-4-6=, =claude-fable-5=,
+  =claude-opus-4-8/4-7/4-6=; injection before the final params merge so
+  =:request-params= still override.
+- Tests: =test/gptel-anthropic-effort-test.el=, 5 ert tests, all pass
+  standalone.  NOTE: the full =make -C test test= suite is broken at
+  baseline — installed =transient= 0.7.2.2 lacks the =:environment= prefix
+  slot used by =gptel-transient.el=, so the suite crashes at load;
+  pre-existing, unrelated to this feature.
+- Phase 2: =:thinking-effort:= properties added to 10 Claude-backed agent
+  files in =~/siro-orga= (commit =5336cf5= on =master=): high for Opus/Fable
+  tiers, medium for Sonnet, low for the Haiku executor.
+** AI-DO Port thinking-effort feature from =orga-stable= to =orga=
+*** Origin
+- Follow-up of [[file:gptel.org::*Support Anthropic adaptive thinking effort (thinking + output_config)][Support Anthropic adaptive thinking effort (thinking + output_config)]],
+  which landed on =orga-stable= only (user directed the work to stable).
+*** Mission
+Bring the feature to the =orga= dev branch.  Options:
+- (a) merge =orga-stable= into =orga= — carries the feature but ALSO
+  carries stable's recent reverts (e.g. =c37190b= reverting the
+  sentence-boundary feature), which =orga= may still want to keep.
+- (b) cherry-pick =3fc204f= (and bump the test submodule pointer to
+  =bbed19f=) — feature only, no reverts; recommended if the reverts
+  must not reach =orga=.
+User decision needed on (a) vs (b).
 *** Outcomes / Results
