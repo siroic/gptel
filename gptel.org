@@ -1568,3 +1568,24 @@ Bring the feature to the =orga= dev branch.  Options:
   must not reach =orga=.
 User decision needed on (a) vs (b).
 *** Outcomes / Results
+** AI-DO Gate Anthropic effort parameter on model capability
+*** Origin
+- =executor= agent (Claude haiku + =:thinking-effort: low=) fails with
+  API error "This model does not support the effort parameter".
+  Discovered during claude-sonnet-5 rollout.
+*** Discussion highlights
+- In =gptel-anthropic.el= =gptel--request-data=, =:output_config
+  (:effort ...)= is sent unconditionally when =gptel-thinking-effort=
+  is non-nil; only the =:thinking= adaptive block is gated on the
+  =adaptive-thinking= capability. Haiku models reject the effort param.
+- Mitigation applied: removed =:thinking-effort= from the =executor=
+  agent definition (=siro-orga= master).
+*** Mission
+Options:
+- Option A: gate the whole thinking-effort block on
+  =(gptel--model-capable-p 'adaptive-thinking)=, auditing that all
+  effort-supporting models (=sonnet-4-6=, =sonnet-5=, =opus-4-8=,
+  =fable-5=) carry the =adaptive-thinking= capability flag.
+- Option B: introduce a distinct =effort= capability and gate on that,
+  keeping =adaptive-thinking= display separate.
+*** Outcomes / Results
