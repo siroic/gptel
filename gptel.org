@@ -1411,3 +1411,120 @@ just typed.  Preserve =word= as an opt-in for evil-mode users and add
 | =gptel--at-word-end= macro           | =~/gptel/gptel-request.el::1037= |
 | Evil-mode workaround comment         | =~/gptel/gptel-request.el::2188= |
 | Org-mode prompt path                 | =~/gptel/gptel-org.el::226=      |
+** AI-DO Support Anthropic adaptive thinking effort (thinking + output_config)
+*** Origin
+- Requested in siro-orga discussion (urho): plan how to implement
+  Anthropic "thinking effort".  Constraints given:
+  - Only for Anthropic APIs.
+  - Request must carry:
+    #+begin_src json
+      "thinking": { "type": "adaptive" },
+      "output_config": { "effort": "high" }
+    #+end_src
+  - Effort is set in org properties for each preset (agent =.org=
+    property drawers).
+*** Discussion highlights (API research)
+- Both parameters are GA — no =anthropic-beta= header required.
+- =output_config.effort= values: ="low"= | ="medium"= | ="high"=
+  (server default) | ="xhigh"= | ="max"=.  =effort= must live inside
+  =output_config= at top level, never inside =thinking= (400 error).
+- =thinking {type: "adaptive"}= takes NO =budget_tokens= (rejected if
+  present).  Optional =display= field: ="summarized"= | ="omitted"=.
+  On the newest models (Opus 4.7/4.8+) =display= defaults to
+  ="omitted"= — the thinking block arrives with empty text unless
+  ="summarized"= is sent explicitly.
+- Model support: adaptive thinking works on Opus 4.6+/Sonnet 4.6+
+  generation; it *errors (HTTP 400)* on the 4.5 generation
+  (Opus/Sonnet/Haiku 4.5, which require =enabled= + =budget_tokens=).
+  ="xhigh"= is restricted to the newest generation only.
+  =effort= alone (without adaptive thinking) works even on 4.5 models.
+- Streaming shape is unchanged (=thinking_delta= / =signature_delta=
+  events as today).  With adaptive, the model may produce *no*
+  thinking block at all for simple queries — gptel's existing parser
+  already tolerates both cases, so no receive-side changes needed.
+- =max_tokens= remains a hard ceiling over thinking + text; gptel's
+  Anthropic default is 4096, which high effort can exhaust
+  (=stop_reason: "max_tokens"=).
+*** Current code facts
+- =gptel-anthropic.el= =gptel--request-data= builds the payload and
+  ends with =(gptel--merge-plists prompts-plist gptel--request-params
+  (gptel-backend-request-params …) (gptel--model-request-params …))=
+  — later plists win.  There is no send-side thinking support today
+  (all existing "thinking" code is receive-side parsing).
+- Preset machinery: =gptel--apply-preset= maps any unrecognized
+  =:key= to a bound variable =gptel-<key>= (via =intern-soft= +
+  =boundp=).  So a preset key =:thinking-effort= sets
+  =gptel-thinking-effort= automatically once that defcustom exists.
+- =gptel-agent-parse-org-properties= passes unknown =:PROPERTIES:=
+  drawer keys through as strings into the plist handed to
+  =gptel-make-preset=.  So =:thinking-effort: high= in an agent
+  =.org= file flows end-to-end with *zero gptel-agent changes*.
+*** Mission
+Add per-preset Anthropic thinking-effort control: a new
+=gptel-thinking-effort= variable settable from agent org property
+drawers; the Anthropic request builder injects
+=thinking {type adaptive}= + =output_config {effort}= for capable
+models; all other backends are unaffected by construction (the
+injection lives only in the Anthropic =gptel--request-data= method).
+*** Design
+1. New defcustom =gptel-thinking-effort= in =gptel-anthropic.el=.
+   Values: nil (default — send nothing, current behaviour preserved)
+   or one of ="low"= ="medium"= ="high"= ="xhigh"= ="max"=.
+   Buffer-local friendly; set per preset via the generic
+   =:thinking-effort= preset key.
+2. Add an =adaptive-thinking= capability flag to the capable entries
+   in =gptel--anthropic-models= (Opus 4.6/4.7/4.8, Sonnet 4.6+,
+   Fable, …); guard injection with
+   =(gptel--model-capable-p 'adaptive-thinking)=.
+3. In the Anthropic =gptel--request-data=, before the final merge,
+   when the variable is non-nil and the model is capable:
+   #+begin_src elisp
+     (plist-put prompts-plist :thinking
+                '(:type "adaptive" :display "summarized"))
+     (plist-put prompts-plist :output_config
+                `(:effort ,gptel-thinking-effort))
+   #+end_src
+   - =display "summarized"= keeps the reasoning stream visible on
+     models whose server default is ="omitted"=.
+   - Merge order is preserved: explicit =:request-params= (preset,
+     backend, or model) can still override both keys.
+4. Preset / org-property integration: no parser changes required
+   (see Current code facts).  Add =:thinking-effort:= lines to the
+   Claude-backed agent =.org= files in =~/siro-orga/agents/=
+   (e.g. implementer/verifier high or max, researcher medium,
+   executor/gatherer low — exact values per agent tier at rollout).
+5. Tests (=test/=): unit tests asserting (a) both keys present when
+   variable set + model capable, (b) absent when variable nil,
+   (c) absent when model lacks the capability, (d) non-Anthropic
+   backends never see the keys, (e) =:request-params= override wins.
+*** Decisions (options for user)
+1. Variable / property name:
+   - (a) =gptel-thinking-effort= / =:thinking-effort:= — recommended
+     (generic name; Anthropic-only effect documented in docstring).
+   - (b) =gptel-anthropic-thinking-effort= /
+     =:anthropic-thinking-effort:= — explicit but verbose.
+2. Claude models without adaptive support (e.g. =claude-haiku-4-5=):
+   - (a) silently skip injection — recommended (no 400 risk).
+   - (b) send only =output_config {effort}= without =thinking= (works
+     on the 4.5 generation) — more coverage, slightly more logic.
+3. =display= field:
+   - (a) always send ="summarized"= — recommended (keeps gptel's
+     reasoning display working on newest models).
+   - (b) omit and accept server default (="omitted"= on newest →
+     reasoning block arrives empty).
+4. ="xhigh"= gating:
+   - (a) no client-side validation; let the API reject unsupported
+     values — recommended (less model-table maintenance).
+   - (b) per-model allowed-effort lists.
+5. =max_tokens= default (4096) under high effort:
+   - (a) leave as is; users raise =gptel-max-tokens= per preset —
+     recommended.
+   - (b) bump the default when adaptive thinking is injected.
+*** TODOs
+**** phase 1 — gptel (branch =orga=)
+***** AI-DO Add =gptel-thinking-effort= defcustom and =adaptive-thinking= capability flags
+***** AI-DO Inject =thinking= / =output_config= in Anthropic =gptel--request-data=
+***** AI-DO Unit tests for effort injection and non-Anthropic isolation
+**** phase 2 — siro-orga presets
+***** AI-DO Add =:thinking-effort:= properties to Claude-backed agent org files
+*** Outcomes / Results
