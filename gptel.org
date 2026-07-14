@@ -1520,6 +1520,12 @@ injection lives only in the Anthropic =gptel--request-data= method).
    - (a) leave as is; users raise =gptel-max-tokens= per preset —
      recommended.
    - (b) bump the default when adaptive thinking is injected.
+**** FEEDBACK By master branch i mean stable
+1. a
+2. b
+3. a
+4. a
+5. a
 *** TODOs
 **** phase 1 — gptel (branch =orga=)
 ***** AI-DO Add =gptel-thinking-effort= defcustom and =adaptive-thinking= capability flags
