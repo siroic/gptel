@@ -338,20 +338,39 @@ depend on the value of `gptel-org-branching-context', which see."
       (dolist (bounds element-markers)
         (apply #'delete-region bounds)))))
 
+(defun gptel-org--strip-line ()
+  "Delete the current line (from its start), including its newline."
+  (delete-region (line-beginning-position)
+                 (min (point-max) (1+ (line-end-position)))))
+
 (defun gptel-org--strip-block-headers ()
   "Remove all gptel-specific block headers and footers.
 Every line that matches will be removed entirely.
 
-This removal is necessary to avoid auto-mimicry by LLMs."
+This removal is necessary to avoid auto-mimicry by LLMs.
+
+Tool-result blocks use `#+begin_src gptel-tool' / `#+end_src'; the
+closing `#+end_src' is only stripped when it terminates a gptel-tool
+block, so unrelated source blocks in the context are left intact.
+Reasoning blocks use `#+begin_reasoning' / `#+end_reasoning'."
   (save-excursion
     (goto-char (point-min))
     (while (re-search-forward
             (rx line-start (literal "#+")
-                (or (literal "begin") (literal "end"))
-                (or (literal "_tool") (literal "_reasoning")))
+                (or (seq (literal "begin_src gptel-tool"))
+                    (seq (or (literal "begin") (literal "end"))
+                         (literal "_reasoning"))))
             nil t)
-      (delete-region (match-beginning 0)
-                     (min (point-max) (1+ (line-end-position)))))))
+      (let ((tool-block (save-excursion
+                          (goto-char (match-beginning 0))
+                          (looking-at-p "#\\+begin_src gptel-tool"))))
+        (goto-char (match-beginning 0))
+        (gptel-org--strip-line)
+        (when tool-block
+          ;; Remove the matching `#+end_src' that closes this block.
+          (when (re-search-forward (rx line-start (literal "#+end_src")) nil t)
+            (goto-char (match-beginning 0))
+            (gptel-org--strip-line)))))))
 
 (defun gptel-org--unescape-tool-results ()
   "Undo escapes done to keep results from escaping blocks.
@@ -369,7 +388,7 @@ contents."
             ;; User edits to clean up can potentially insert a tool-call header
             ;; that is propertized.  Tool call headers should not be
             ;; propertized.
-            (when (looking-at-p "[[:space:]]*#\\+begin_tool")
+            (when (looking-at "[[:space:]]*#\\+begin_src gptel-tool")
               (goto-char (match-end 0)))
             ;; TODO this code is able to put the point behind prev-pt, which
             ;; makes the region inverted.  The `max' catches this, but really

@@ -2267,12 +2267,11 @@ for tool call results.  INFO contains the state of the request."
                (if (derived-mode-p 'org-mode)
                    (concat
                     separator
-                    "#+begin_tool "
-                    truncated-call
+                    "#+begin_src gptel-tool"
                     (propertize
                      (org-escape-code-in-string (concat "\n" call "\n\n" result))
                      'gptel `(tool . ,id))
-                    "\n#+end_tool\n")
+                    "\n#+end_src\n")
                  ;; TODO(tool) else branch is handling all front-ends as markdown.
                  ;; At least escape markdown.
                  (concat
@@ -2301,7 +2300,7 @@ for tool call results.  INFO contains the state of the request."
              (goto-char tracking-marker)
              (forward-line -1)
              (if (derived-mode-p 'org-mode)
-                 (when (looking-at-p "^#\\+end_tool") (org-cycle))
+                 (when (looking-at-p "^#\\+end_src") (org-cycle))
                (when (looking-at-p "^```") (gptel-markdown-cycle-block))))))))))
 
 (defun gptel--format-tool-call (name arg-values)
