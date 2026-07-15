@@ -568,7 +568,7 @@ Media files, if present, are placed in `gptel-context'."
 (defconst gptel--anthropic-models
   '((claude-sonnet-5
      :description "Newest and smartest Sonnet — best combination of speed and intelligence"
-     :capabilities (media tool-use cache adaptive-thinking)
+     :capabilities (media tool-use cache)
      :mime-types ("image/jpeg" "image/png" "image/gif" "image/webp" "application/pdf")
      :context-window 1000
      :input-cost 3
