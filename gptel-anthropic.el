@@ -35,38 +35,6 @@
 (declare-function gptel-context--wrap "gptel-context")
 (declare-function gptel-context--collect-media "gptel-context")
 
-(defcustom gptel-thinking-effort nil
-  "Adaptive thinking effort level for Anthropic (Claude) requests.
-
-This option only affects Anthropic (Claude) requests; it is ignored
-by all other backends.
-
-When non-nil, it should be one of the strings \"low\", \"medium\",
-\"high\", \"xhigh\" or \"max\".  The value is sent to the API as the
-effort level in the request\\='s \"output_config\" field.  For models
-that support adaptive thinking, an adaptive \"thinking\" block is also
-included so that reasoning summaries continue to stream.  When nil
-(the default), nothing is sent and the previous behaviour is
-preserved.
-
-No client-side validation of the value is performed beyond the
-customize choices below; an unrecognized value is passed through and
-the API is left to reject it.
-
-This option can be set per preset via the generic `:thinking-effort'
-preset key: gptel\\='s preset machinery maps unknown preset keys to
-the corresponding `gptel-<key>' variable automatically.  It is
-intended to be let-bound or set buffer-locally."
-  :group 'gptel
-  :type '(choice
-          (const :tag "Off (send nothing)" nil)
-          (const :tag "Low" "low")
-          (const :tag "Medium" "medium")
-          (const :tag "High" "high")
-          (const :tag "Extra high" "xhigh")
-          (const :tag "Max" "max")
-          (string :tag "Other")))
-
 ;;; Anthropic (Messages API)
 (cl-defstruct (gptel-anthropic (:constructor gptel--make-anthropic)
                                (:copier nil)
@@ -295,12 +263,6 @@ Mutate state INFO with response metadata."
                   (plist-get prompts-plist :tools)))
       (plist-put prompts-plist :tool_choice
                  `(:type "tool" :name ,gptel--ersatz-json-tool)))
-    (when gptel-thinking-effort
-      (plist-put prompts-plist :output_config
-                 `(:effort ,gptel-thinking-effort))
-      (when (gptel--model-capable-p 'adaptive-thinking)
-        (plist-put prompts-plist :thinking
-                   '(:type "adaptive" :display "summarized"))))
     ;; Merge request params with model and backend params.
     (gptel--merge-plists
      prompts-plist
@@ -614,7 +576,7 @@ Media files, if present, are placed in `gptel-context'."
      :cutoff-date "2026-01")
     (claude-sonnet-4-6
      :description "The best combination of speed and intelligence"
-     :capabilities (media tool-use cache adaptive-thinking)
+     :capabilities (media tool-use cache)
      :mime-types ("image/jpeg" "image/png" "image/gif" "image/webp" "application/pdf")
      :context-window 1000
      :input-cost 3
@@ -646,7 +608,7 @@ Media files, if present, are placed in `gptel-context'."
      :cutoff-date "2025-03")
     (claude-fable-5
      :description "Most capable model for complex reasoning and advanced coding"
-     :capabilities (media tool-use cache adaptive-thinking)
+     :capabilities (media tool-use cache)
      :mime-types ("image/jpeg" "image/png" "image/gif" "image/webp" "application/pdf")
      :context-window 1000
      :input-cost 10
@@ -654,7 +616,7 @@ Media files, if present, are placed in `gptel-context'."
      :cutoff-date "2026-01")
     (claude-opus-4-8
      :description "Most capable model for complex reasoning and advanced coding"
-     :capabilities (media tool-use cache adaptive-thinking)
+     :capabilities (media tool-use cache)
      :mime-types ("image/jpeg" "image/png" "image/gif" "image/webp" "application/pdf")
      :context-window 1000
      :input-cost 5
@@ -662,7 +624,7 @@ Media files, if present, are placed in `gptel-context'."
      :cutoff-date "2026-01")
     (claude-opus-4-7
      :description "Most capable model for complex reasoning and advanced coding"
-     :capabilities (media tool-use cache adaptive-thinking)
+     :capabilities (media tool-use cache)
      :mime-types ("image/jpeg" "image/png" "image/gif" "image/webp" "application/pdf")
      :context-window 1000
      :input-cost 5
@@ -670,7 +632,7 @@ Media files, if present, are placed in `gptel-context'."
      :cutoff-date "2026-01")
     (claude-opus-4-6
      :description "Most capable model for complex reasoning and advanced coding"
-     :capabilities (media tool-use cache adaptive-thinking)
+     :capabilities (media tool-use cache)
      :mime-types ("image/jpeg" "image/png" "image/gif" "image/webp" "application/pdf")
      :context-window 200
      :input-cost 5
