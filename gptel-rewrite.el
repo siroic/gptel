@@ -805,7 +805,10 @@ generated from functions."
                ;; NOTE: Switch to `generate-new-buffer' after we drop Emacs 27.1 (#724)
                (cons ov (gptel--temp-buffer " *gptel-rewrite*")))
              :transforms gptel-prompt-transform-functions
-             :fsm (gptel-make-fsm :handlers gptel--rewrite-handlers)
+             ;; gptel--rewrite-handlers registers a TPRE handler; TPRE exists only in
+             ;; gptel-send--transitions, not the default gptel-request--transitions.
+             :fsm (gptel-make-fsm :table gptel-send--transitions
+                                  :handlers gptel--rewrite-handlers)
              :callback #'gptel--rewrite-callback)
       ;; Move back so that the cursor is on the overlay when done.
       (unless (get-char-property (point) 'gptel-rewrite)
