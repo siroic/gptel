@@ -1959,7 +1959,13 @@ injects the results into the prompt data and transitions the FSM."
                                   (apply confirm (gptel--map-tool-args tool-spec args))))))
                    (setq confirm t)))
                  (if confirm  ;To send to callback for confirmation
-                     (push (list tool-spec args process-tool-result) pending-calls)
+                     ;; Include the tool-call plist (carries :id) so
+                     ;; downstream confirmation UIs can correlate each
+                     ;; pending call with its wire id.  All existing
+                     ;; consumers destructure only the first three
+                     ;; elements and ignore the extra one.
+                     (push (list tool-spec args process-tool-result tool-call)
+                           pending-calls)
                    (if-let* ((err (gptel--validate-tool-args tool-spec args)))
                        (funcall process-tool-result err)
                      (let ((arg-values (gptel--map-tool-args tool-spec args)))
