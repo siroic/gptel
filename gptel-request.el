@@ -2379,10 +2379,16 @@ Initiate the request when done."
     (unless (plist-get info :dry-run) (gptel--fsm-transition fsm))
     fsm))
 
-(defun gptel-abort (buf)
+(defun gptel-abort (buf &optional reason cause)
   "Stop any active gptel process associated with buffer BUF.
 
-BUF defaults to the current buffer."
+BUF defaults to the current buffer.
+
+REASON indicates why the request is being aborted: `user' (the
+default when nil) for interactive/user-initiated aborts, or
+`system' for automated aborts triggered by machinery rather than
+the user.  CAUSE is an optional explanatory string describing the
+abort; it is recorded on the request info as :abort-cause."
   (interactive (list (current-buffer)))
   (when-let* ((proc-attrs
                (cl-find-if
@@ -2397,6 +2403,8 @@ BUF defaults to the current buffer."
               (fsm (cadr proc-attrs))
               (info (gptel-fsm-info fsm))
               (abort-fn (cddr proc-attrs)))
+    (plist-put info :abort-reason (or reason 'user))
+    (when cause (plist-put info :abort-cause cause))
     ;; Run :callback with abort signal
     (with-demoted-errors "Callback error: %S"
       (and-let* ((cb (plist-get info :callback))
