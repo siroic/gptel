@@ -751,6 +751,12 @@ These parameters are combined with model-specific and backend-specific
 incompatible with the active backend can break gptel.  Do not use this
 variable unless you know what you're doing!")
 
+(defvar gptel--current-tool-call nil
+  "The tool-call plist (:name :args :id ...) currently being invoked.
+Dynamically bound around each tool function call in
+`gptel--handle-tool-use' so tool functions / their advice can correlate
+the call with its wire :id.  nil outside a tool invocation.")
+
 (defconst gptel--ersatz-json-tool "response_json"
   "Name of ersatz tool used to force JSON output.
 
@@ -1968,7 +1974,8 @@ injects the results into the prompt data and transitions the FSM."
                            pending-calls)
                    (if-let* ((err (gptel--validate-tool-args tool-spec args)))
                        (funcall process-tool-result err)
-                     (let ((arg-values (gptel--map-tool-args tool-spec args)))
+                     (let ((arg-values (gptel--map-tool-args tool-spec args))
+                           (gptel--current-tool-call tool-call))
                        (if (gptel-tool-async tool-spec) ;If not, run the tool
                            (apply (gptel-tool-function tool-spec)
                                   process-tool-result arg-values)
