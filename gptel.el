@@ -1559,9 +1559,9 @@ Perform UI updates and run post-response hooks."
                         (args (plist-get tool-call :args))
                         (id   (plist-get tool-call :id))
                         (hook-func-result
-                         (with-demoted-errors "gptel-pre-tool-call hook error: %S"
-                           (funcall hook-func (nconc (list :name name :args args :id id)
-                                                     hook-func-args)))))
+                         ;; siro fork: propagate pre-tool hook errors always (see siro-gptel-hooks).
+                         (funcall hook-func (nconc (list :name name :args args :id id)
+                                                   hook-func-args))))
                    (if (plist-get hook-func-result :stop) ; Stop the request immediately
                        (let ((reason (or (plist-get hook-func-result :stop-reason)
                                          (concat "Request stopped by pre-tool-call hook "
