@@ -98,8 +98,10 @@ information if the stream contains it.  Not my best work, I know."
                      info :partial_json
                      (cons partial-json (plist-get info :partial_json)))
                   (if-let* ((thinking (plist-get delta :thinking)))
-                      (plist-put info :reasoning
-                                 (concat (plist-get info :reasoning) thinking))
+                      (progn
+                        (plist-put info :reasoning
+                                   (concat (plist-get info :reasoning) thinking))
+                        (plist-put info :reasoning-block 'in))
                     (if-let* ((signature (plist-get delta :signature)))
                         (plist-put info :signature
                                    (concat (plist-get info :signature) signature))))))))
@@ -114,8 +116,11 @@ information if the stream contains it.  Not my best work, I know."
                                                    :name (plist-get cblock :name)
                                                    :input nil) ;ensure :input key is always present
                                              (plist-get info :tool-use))))
-                ("thinking" (plist-put info :reasoning (plist-get cblock :thinking))
-                 (plist-put info :reasoning-block 'in)))))
+                ("thinking" (when-let* ((thinking (plist-get cblock :thinking))
+                                        ((stringp thinking))
+                                        ((not (string-empty-p thinking))))
+                              (plist-put info :reasoning thinking)
+                              (plist-put info :reasoning-block 'in))))))
 
            ((looking-at "content_block_stop")
             (cond
@@ -196,10 +201,11 @@ Mutate state INFO with response metadata."
    collect cblock into tool-use
    else if (equal type "thinking")
    do
-   (plist-put
-    info :reasoning
-    (concat (plist-get info :reasoning)
-            (plist-get cblock :thinking)))
+   (when-let* ((thinking (plist-get cblock :thinking))
+               ((stringp thinking))
+               ((not (string-empty-p thinking))))
+     (plist-put info :reasoning
+                (concat (plist-get info :reasoning) thinking)))
    finally do
    (when tool-use
      ;; First, add the tool call to the prompts list
