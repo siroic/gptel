@@ -1589,3 +1589,48 @@ Options:
 - Option B: introduce a distinct =effort= capability and gate on that,
   keeping =adaptive-thinking= display separate.
 *** Outcomes / Results
+** AI-DO Suppress empty reasoning headings from Anthropic backend
+*** Origin
+Observed empty =REASONED= org headings in chat buffers, e.g.
+=playground.org= custom-id =a5a5f84f-7a59-4e59-b043-abbb43bf9c44= —
+a =REASONED= heading with a property drawer but no body.  Studied in
+the siro-orga workspace discussion (user urho).
+*** Discussion highlights
+- The reasoning heading is created on the FIRST =(reasoning . TEXT)=
+  callback, before any real thinking text is known to exist.
+- Streaming path: =gptel-anthropic.el= sets =:reasoning= to the
+  =content_block_start= block's =:thinking= value, which Anthropic
+  sends as ="" = (text arrives in later deltas).  The streaming
+  filter in =gptel-request.el= (~L3082) guards only with
+  =(stringp reasoning)=, and =(stringp "")= is =t=, so a
+  =(reasoning . "")= callback fires and
+  =gptel-pre-reasoning-hook= creates the heading.  If no thinking
+  deltas ever arrive (empty thinking block, e.g. tool-use rounds),
+  the =content_block_stop= → =(reasoning . t)= callback closes the
+  segment as =REASONED= with an empty body.
+- Non-streaming path: =gptel--parse-response= in
+  =gptel-anthropic.el= does =(concat nil nil)= → ="" = when a
+  thinking block has no =:thinking= key; the callback site in
+  =gptel-request.el= (~L2737) has the same =stringp=-only guard.
+*** Mission
+No reasoning heading should appear when no thinking text occurred;
+when thinking does occur, the heading is created at the first
+non-empty chunk as today.
+*** Options
+- Option A (recommended): in =gptel-request.el=, guard both callback
+  sites with non-empty checks —
+  - streaming filter (~L3082): change =(stringp reasoning)= to
+    =(and (stringp reasoning) (not (string-empty-p reasoning)))=
+  - non-streaming (~L2737): add =((not (string-empty-p reasoning)))=
+    to the =when-let*= chain.
+  Backend-agnostic, ~2 lines, defers heading creation to the first
+  real delta.
+- Option B: fix only =gptel-anthropic.el= (don't set =:reasoning=
+  to an empty string at =content_block_start=; avoid
+  =(concat nil nil)= in the non-streaming parser).  Leaves other
+  backends unprotected.
+- Option C: siro-orga layer — in
+  =siro-gptel-hooks--post-reasoning=, delete the =REASONING= segment
+  if empty instead of closing it as =REASONED=.  Heading still
+  flashes transiently during streaming.
+*** Outcomes / Results
