@@ -1655,7 +1655,7 @@ sibling task (see link in Outcomes).
   - Empty thinking blocks leave =:reasoning-block= nil, so no
     spurious =(reasoning . t)= end signal fires.
 - Follow-up: [[file:gptel.org::*Study how to observe Anthropic reasoning content][Study how to observe Anthropic reasoning content]]
-** AI-DO Study how to observe Anthropic reasoning content
+** DONE Study how to observe Anthropic reasoning content
 *** Origin
 User feedback in [[file:gptel.org::*Suppress empty reasoning headings from Anthropic backend][Suppress empty reasoning headings from Anthropic backend]]:
 "make another todo about studying how to see anthropics reasoning".
