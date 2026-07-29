@@ -1496,6 +1496,7 @@ a tool, use `gptel-make-tool', which see."
                           (:constructor gptel--make-tool-internal
                                         (&key function name description args
                                               async category confirm include
+                                              org-output
                                               &allow-other-keys))
                           (:copier gptel--copy-tool))
   "Struct to specify tools for LLMs to run.
@@ -1512,7 +1513,8 @@ feed the LLM the results.  You can add tools via
   (async nil :type boolean :documentation "Whether the function runs asynchronously")
   (category nil :type string :documentation "Use to group tools by purpose")
   (confirm nil :type boolean :documentation "Seek confirmation before running tool?")
-  (include t :type boolean :documentation "Include tool results in buffer?"))
+  (include t :type boolean :documentation "Include tool results in buffer?")
+  (org-output nil :type boolean :documentation "Result is org-formatted/org-safe, needs no auto-correction on insertion"))
 
 (defun gptel--preprocess-tool-args (spec)
   "Convert symbol :type values in tool SPEC to strings destructively."
