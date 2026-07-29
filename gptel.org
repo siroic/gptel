@@ -1589,7 +1589,7 @@ Options:
 - Option B: introduce a distinct =effort= capability and gate on that,
   keeping =adaptive-thinking= display separate.
 *** Outcomes / Results
-** AI-DO Suppress empty reasoning headings from Anthropic backend
+** AI-DONE Suppress empty reasoning headings from Anthropic backend
 *** Origin
 Observed empty =REASONED= org headings in chat buffers, e.g.
 =playground.org= custom-id =a5a5f84f-7a59-4e59-b043-abbb43bf9c44= —
@@ -1633,4 +1633,42 @@ non-empty chunk as today.
   =siro-gptel-hooks--post-reasoning=, delete the =REASONING= segment
   if empty instead of closing it as =REASONED=.  Heading still
   flashes transiently during streaming.
+**** FEEDBACK Option B
+- make another todo about studying how to sea anthropics reasoning
+**** AI-FEEDBACK Implemented Option B in gptel-anthropic.el; follow-up study TODO created
+Option B implemented: =gptel-anthropic.el= no longer records an
+empty =:reasoning= at =content_block_start= — the reasoning block
+is only opened when the first non-empty thinking text arrives
+(start block or delta), and the non-streaming parser guards
+against =(concat nil nil)= → ="" =.  Empty thinking blocks now
+produce no reasoning callbacks at all, so no empty =REASONED=
+headings.  Byte-compile clean.  Follow-up study TODO added as a
+sibling task (see link in Outcomes).
+*** Outcomes / Results
+- Implemented Option B (backend-local fix in =gptel-anthropic.el=):
+  - streaming: ="thinking"= =content_block_start= only sets
+    =:reasoning= / =:reasoning-block 'in= for non-empty thinking
+    text; thinking deltas now mark the block open instead.
+  - non-streaming: thinking blocks are concatenated into
+    =:reasoning= only when non-empty, avoiding ="" = from
+    =(concat nil nil)=.
+  - Empty thinking blocks leave =:reasoning-block= nil, so no
+    spurious =(reasoning . t)= end signal fires.
+- Follow-up: [[file:gptel.org::*Study how to observe Anthropic reasoning content][Study how to observe Anthropic reasoning content]]
+** AI-DO Study how to observe Anthropic reasoning content
+*** Origin
+User feedback in [[file:gptel.org::*Suppress empty reasoning headings from Anthropic backend][Suppress empty reasoning headings from Anthropic backend]]:
+"make another todo about studying how to see anthropics reasoning".
+*** Mission
+Study how Anthropic's (extended) thinking/reasoning content can be
+observed and inspected in this setup:
+- When does Anthropic actually emit thinking blocks (extended
+  thinking enabled, tool-use rounds, interleaved thinking) and when
+  are they empty or redacted (=redacted_thinking=)?
+- How does =gptel= expose it: =gptel-include-reasoning= values
+  (=t=, =ignore=, nil, buffer name) and their effect on display and
+  resending; the =(reasoning . TEXT)= callback protocol.
+- How the siro-orga layer renders it (=REASONING= / =REASONED=
+  segments) and what options exist for making reasoning easier to
+  see/inspect (e.g. dedicated buffer, logging raw stream events).
 *** Outcomes / Results
