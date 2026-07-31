@@ -1913,24 +1913,40 @@ TOOL-CALL is a plist with the tool :name, :args and other metadata.
 TOOL-SPEC is the `gptel-tool' object, and FSM is the request state.
 
 If all pending tool calls in the current request have finished, it
-injects the results into the prompt data and transitions the FSM."
-  (let* ((info (gptel-fsm-info fsm))
-         (tool-result-alist (plist-get info :tool-result))
-         ;; MAYBE(tool-hooks): Use plist-member for valid nil :result?
-         (remaining (cl-loop for call in (plist-get info :tool-use)
-                             count (not (plist-get call :result)))))
-    (let ((result (gptel--to-string result)))
-      ;; FIXME(tool-hooks): If a hook has changed the tool that was called
-      ;; tool-spec needs to be updated.
-      (push (list tool-spec (plist-get tool-call :args) result)
-            tool-result-alist)
-      (plist-put info :tool-result tool-result-alist) ;for the callback
-      ;; NOTE: tool-call is a member of (plist-get info :tool-use), so :tool-use
-      ;; is modified by side effect.
-      ;; FIXME: Make the implicit addition to :tool-use explicit
-      (plist-put tool-call :result result)) ;for the LLM
-    ;; All tools have run
-    (when (<= (cl-decf remaining) 0) (gptel--fsm-transition fsm))))
+injects the results into the prompt data and transitions the FSM.
+
+Do nothing if FSM is already in a terminal state: a tool's process
+sentinel can fire after the request was aborted, and its result must not
+be written into the dead request.  Info's :abort-reason counts as
+terminal too: both abort paths record it before running the callback and
+killing tool processes, but transition FSM to ABRT only afterwards, so
+checking the state alone leaves a window in which a sentinel firing from
+inside the callback could revive the request."
+  (unless (or (memq (gptel-fsm-state fsm) '(ABRT DONE ERRS))
+              (plist-get (gptel-fsm-info fsm) :abort-reason))
+    (let* ((info (gptel-fsm-info fsm))
+           (tool-result-alist (plist-get info :tool-result))
+           ;; MAYBE(tool-hooks): Use plist-member for valid nil :result?
+           (remaining (cl-loop for call in (plist-get info :tool-use)
+                               count (not (plist-get call :result)))))
+      (let ((result (gptel--to-string result)))
+        ;; FIXME(tool-hooks): If a hook has changed the tool that was called
+        ;; tool-spec needs to be updated.
+        (push (list tool-spec (plist-get tool-call :args) result)
+              tool-result-alist)
+        (plist-put info :tool-result tool-result-alist) ;for the callback
+        ;; NOTE: tool-call is a member of (plist-get info :tool-use), so :tool-use
+        ;; is modified by side effect.
+        ;; FIXME: Make the implicit addition to :tool-use explicit
+        (plist-put tool-call :result result)) ;for the LLM
+      ;; This tool's process (if any) has exited: drop dead processes so
+      ;; :tool-processes only ever holds in-flight ones.
+      (when (plist-get info :tool-processes)
+        (plist-put info :tool-processes
+                   (cl-delete-if-not #'process-live-p
+                                     (plist-get info :tool-processes))))
+      ;; All tools have run
+      (when (<= (cl-decf remaining) 0) (gptel--fsm-transition fsm)))))
 
 (defun gptel--handle-tool-use (fsm)
   "Run tool calls captured in FSM, and advance the state machine with the results."
@@ -1979,8 +1995,16 @@ injects the results into the prompt data and transitions the FSM."
                      (let ((arg-values (gptel--map-tool-args tool-spec args))
                            (gptel--current-tool-call tool-call))
                        (if (gptel-tool-async tool-spec) ;If not, run the tool
-                           (apply (gptel-tool-function tool-spec)
-                                  process-tool-result arg-values)
+                           ;; Async tools that run external commands return
+                           ;; their process; track it so `gptel-abort' can
+                           ;; kill it instead of orphaning it.
+                           (let ((tool-proc
+                                  (apply (gptel-tool-function tool-spec)
+                                         process-tool-result arg-values)))
+                             (when (processp tool-proc)
+                               (plist-put info :tool-processes
+                                          (cons tool-proc
+                                                (plist-get info :tool-processes)))))
                          (let ((result (condition-case errdata
                                            (apply (gptel-tool-function tool-spec) arg-values)
                                          (error (mapconcat #'gptel--to-string errdata " ")))))
@@ -2388,6 +2412,20 @@ Initiate the request when done."
     (unless (plist-get info :dry-run) (gptel--fsm-transition fsm))
     fsm))
 
+(defun gptel--kill-tool-processes (info)
+  "Kill any live tool subprocesses recorded in INFO.
+Tool functions that return a process object (async tools running
+external commands) are tracked in INFO's :tool-processes.  Kill
+each live one, along with its process buffer, and clear the list."
+  (dolist (proc (plist-get info :tool-processes))
+    (when (and (processp proc) (process-live-p proc))
+      (set-process-sentinel proc #'ignore)
+      (when-let* ((buf (process-buffer proc))
+                  ((buffer-live-p buf)))
+        (kill-buffer buf))
+      (delete-process proc)))
+  (plist-put info :tool-processes nil))
+
 (defun gptel-abort (buf &optional reason cause)
   "Stop any active gptel process associated with buffer BUF.
 
@@ -2419,6 +2457,7 @@ abort; it is recorded on the request info as :abort-cause."
       (and-let* ((cb (plist-get info :callback))
                  ((functionp cb)))
         (funcall cb 'abort info)))
+    (gptel--kill-tool-processes info)
     (funcall abort-fn)
     (setf (alist-get proc gptel--request-alist nil 'remove) nil)
     (gptel--fsm-transition fsm 'ABRT)
