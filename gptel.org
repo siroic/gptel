@@ -1672,3 +1672,50 @@ observed and inspected in this setup:
   segments) and what options exist for making reasoning easier to
   see/inspect (e.g. dedicated buffer, logging raw stream events).
 *** Outcomes / Results
+** AI-DO Kill in-flight tool subprocesses on gptel-abort
+*** Origin
+Initiated by urho. Study of why =gptel-abort= does nothing while an
+async tool call (e.g. Bash tool running =sleep=) is in flight.
+*** Discussion highlights
+- =gptel-abort= (=gptel-request.el:2396=) kills only the transport
+  process (curl/SSE), fires the callback with ='abort=, and
+  transitions the FSM to =ABRT=.
+- Async tools like the Bash tool (=gptel-agent-tools.el=,
+  =gptel-agent--execute-bash=) create a subprocess via
+  =make-process= and return the process object — but
+  =gptel--handle-tool-use= (=gptel-request.el:1982=) discards the
+  return value. No registry tracks in-flight tool processes, so
+  nothing ever kills them on abort.
+- After abort, the orphaned tool process runs to completion and its
+  sentinel fires the callback into an already-aborted FSM.
+- The Agent tool must NOT be changed: it spawns a nested
+  =gptel-request= (own FSM) rather than a subprocess, and has its own
+  granular abort via =siro-gptel-hooks--abort-fsm= + IB kill-hooks.
+  Since =gptel-agent--task= does not return a process object, a
+  =processp= guard excludes it automatically.
+*** Mission
+Make =gptel-abort= kill any in-flight tool subprocesses of the
+aborted request, so aborting during a tool call actually stops the
+tool. Agent tool behaviour unchanged.
+*** TODOs
+**** AI-DO Track async tool processes in FSM info
+In =gptel--handle-tool-use= (async dispatch, ~L1982): capture the
+tool function's return value; when =processp=, push it onto
+=(plist-get info :tool-processes)=.
+**** AI-DO Kill tracked processes in gptel-abort
+In =gptel-abort=: before calling the transport abort-fn, iterate
+=:tool-processes=, =delete-process= live ones and kill their process
+buffers.
+**** AI-DO Guard callbacks and prune finished processes
+In =gptel--process-tool-call=: remove dead processes from
+=:tool-processes= as calls complete; guard against a late sentinel
+writing results into an aborted FSM.
+**** AI-DO Mirror kill logic in siro-gptel-hooks--abort-fsm
+In =~/siro-orga/siro-gptel-hooks.el= (=siro-gptel-hooks--abort-fsm=,
+~L446): apply the same =:tool-processes= kill loop so subagent-level
+aborts also kill that subagent's tool processes.
+**** AI-DO Add tests
+ERT tests: async tool process is registered; =gptel-abort= kills it
+(process no longer live); Agent tool (non-process return) is not
+tracked; late sentinel after abort does not corrupt FSM state.
+*** Outcomes / Results
