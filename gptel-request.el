@@ -979,6 +979,32 @@ and \"apikey\" as USER."
     (string s)
     (otherwise (prin1-to-string s))))
 
+(defun gptel--sanitize-string (s)
+  "Replace raw-byte characters in S with \\xNN escapes.
+
+Raw-byte characters are not valid Unicode, so strings containing
+them make `json-serialize' signal `wrong-type-argument'.  They can
+appear in tool results, e.g. strings read from a process or buffer
+with binary content.  In a multibyte string they are characters
+#x3FFF00..#x3FFFFF; in a unibyte string they are characters
+#x80..#xFF.  Each raw byte is replaced with the readable escape
+\\xNN, where NN is the byte's hex value.  Return S unchanged (same
+object) if it contains no raw-byte characters."
+  (let ((unibyte (not (multibyte-string-p s)))
+        (n (length s)))
+    (if (cl-loop for i below n
+                 for c = (aref s i)
+                 thereis (if unibyte
+                             (<= #x80 c #xFF)
+                           (<= #x3FFF00 c #x3FFFFF)))
+        (with-output-to-string
+          (dotimes (i n)
+            (let ((c (aref s i)))
+              (if (if unibyte (<= #x80 c #xFF) (<= #x3FFF00 c #x3FFFFF))
+                  (princ (format "\\x%02X" (if unibyte c (- c #x3FFF00))))
+                (princ (char-to-string c))))))
+      s)))
+
 (defsubst gptel--intern (s)
   "Intern S, if possible."
   (cl-etypecase s
@@ -1929,7 +1955,7 @@ inside the callback could revive the request."
            ;; MAYBE(tool-hooks): Use plist-member for valid nil :result?
            (remaining (cl-loop for call in (plist-get info :tool-use)
                                count (not (plist-get call :result)))))
-      (let ((result (gptel--to-string result)))
+      (let ((result (gptel--sanitize-string (gptel--to-string result))))
         ;; FIXME(tool-hooks): If a hook has changed the tool that was called
         ;; tool-spec needs to be updated.
         (push (list tool-spec (plist-get tool-call :args) result)
