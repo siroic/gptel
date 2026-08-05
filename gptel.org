@@ -1745,7 +1745,7 @@ tracked; late sentinel after abort does not corrupt FSM state.
   failures.
 - Note for future abort paths: the late-sentinel guard relies on
   =:abort-reason= being set as the first act of every abort path.
-** AI-DO Sanitize tool-result strings before JSON serialization (raw-byte crash)
+** AI-DONE Sanitize tool-result strings before JSON serialization (raw-byte crash)
 *** Origin
 - Initiating user: urho. Trigger: live crash in an AI session —
   =json-serialize= signalled =(wrong-type-argument json-value-p
@@ -1785,4 +1785,30 @@ tracked; late sentinel after abort does not corrupt FSM state.
   byte-identical); error-path test that =json-serialize= no longer
   signals.
 *** Outcomes / Results
-- (empty for now)
+- Implemented =gptel--sanitize-string= in =gptel-request.el= (near
+  =gptel--to-string=): single O(n) scan replacing raw-byte chars
+  (multibyte #x3FFF00–#x3FFFFF) AND unibyte bytes #x80–#xFF with
+  literal =\xNN= escapes; returns the same string object when clean.
+- Wired into the single choke point in =gptel--process-tool-call=:
+  =(gptel--sanitize-string (gptel--to-string result))= feeds both
+  =:tool-result= and =:result=, covering all tools/backends/paths.
+- Secondary hardening: Eval tool in
+  =~/gptel-agent/gptel-agent-tools.el= wraps both success and error
+  result strings (incl. stdout) in =gptel--sanitize-string=.
+- Root-cause refinement (verifier, Emacs 30.2): =%S= actually prints
+  byte-code objects with escaped octal (no raw bytes); the real
+  raw-byte sources are string tool results passed through
+  =gptel--to-string= verbatim (binary buffer/process content) and
+  unibyte strings with bytes ≥ 0x80 — the latter was an extra hole,
+  now also fixed.
+- Implementation is scan-based, not regexp-based: raw-byte matching
+  via regexp char classes is Emacs-version-sensitive.
+- Tests: =tests/gptel-request-test.el= (new top-level =tests/= dir —
+  the old =test/= path is an uninitialized git submodule and not
+  committable), 11 ERT tests incl. escape format, clean-string =eq=
+  passthrough, mixed Unicode+raw-byte, unibyte, idempotence,
+  choke-point serialization, and =should-error= repro of the original
+  crash. 11/11 pass; both edited files byte-compile clean.
+- Run tests with: =emacs -Q -batch -L . -l ert -l
+  tests/gptel-request-test.el -f ert-run-tests-batch-and-exit=
+  (delete stale =gptel-request.elc= first).
