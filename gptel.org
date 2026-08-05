@@ -1745,3 +1745,44 @@ tracked; late sentinel after abort does not corrupt FSM state.
   failures.
 - Note for future abort paths: the late-sentinel guard relies on
   =:abort-reason= being set as the first act of every abort path.
+** AI-DO Sanitize tool-result strings before JSON serialization (raw-byte crash)
+*** Origin
+- Initiating user: urho. Trigger: live crash in an AI session —
+  =json-serialize= signalled =(wrong-type-argument json-value-p
+  "9.7.11\n(macro . #[128 ...])")= inside =gptel-curl--get-args= when
+  sending a follow-up request after an Eval tool call.
+*** Discussion highlights
+- Root cause: the Eval tool (=~/gptel-agent/gptel-agent-tools.el:1652-1690=)
+  formats its result with =(format "Result:\n%S" result)=. Printing a
+  byte-code object (here a macro from org-fold-core) with =%S= embeds
+  RAW-BYTE characters (codepoints #x3FFF00–#x3FFFFF) in the multibyte
+  result string. Such characters are not valid Unicode, so
+  =json-serialize= rejects the string when the tool result is injected
+  into the next request's =:messages=.
+- Confirmed by minimal repro: =(json-serialize (list :a
+  (string-to-multibyte "\200")))= → =(wrong-type-argument json-value-p
+  "\200")=.
+- Tool results flow through a single choke point:
+  =gptel--process-tool-call= (=~/gptel/gptel-request.el:1921-1946=),
+  which calls =(gptel--to-string result)= at line ~1932 — but
+  =gptel--to-string= passes strings through UNMODIFIED, so raw bytes
+  reach =:result= and then every backend's
+  =gptel--parse-tool-results= copies them verbatim into the payload.
+- No sanitization exists anywhere in =~/gptel=, =~/gptel-agent=, or
+  =~/siro-orga= for this.
+*** Mission
+- Primary fix: in =gptel--process-tool-call= (gptel-request.el ~line
+  1932), sanitize the stringified result before =(plist-put tool-call
+  :result result)= — replace raw-byte characters (regexp
+  ="[\x3FFF00-\x3FFFFF]"=) with a readable escape (e.g. =\xNN=). Zero
+  cost for clean strings; covers all tools, all backends,
+  sync/async/error paths.
+- Secondary hardening: sanitize the Eval tool's =%S= output (and its
+  error format) in =~/gptel-agent/gptel-agent-tools.el= so byte-code
+  raw bytes print as readable escapes at the source.
+- Tests: ERT unit test asserting a tool result containing raw bytes
+  serializes cleanly (and that clean strings pass through
+  byte-identical); error-path test that =json-serialize= no longer
+  signals.
+*** Outcomes / Results
+- (empty for now)
