@@ -1894,7 +1894,9 @@ Optional RAW disables text properties and transformation."
                      (gptel-markdown-cycle-block))))))
              (run-hooks 'gptel-post-reasoning-hook)))))
       (`(tool-call . ,tool-calls)
-       (gptel--display-tool-calls tool-calls info))
+       ;; Only entries awaiting confirmation are actionable here.
+       (when-let* ((pending (gptel--pending-tool-calls tool-calls)))
+         (gptel--display-tool-calls pending info)))
       (`(tool-result . ,tool-results)
        (gptel--display-tool-results tool-results info)))))
 
@@ -1936,7 +1938,9 @@ Optional RAW disables text properties and transformation."
     (`(reasoning . ,text)
      (gptel--display-reasoning-stream text info))
     (`(tool-call . ,tool-calls)
-     (gptel--display-tool-calls tool-calls info))
+     ;; Only entries awaiting confirmation are actionable here.
+     (when-let* ((pending (gptel--pending-tool-calls tool-calls)))
+       (gptel--display-tool-calls pending info)))
     (`(tool-result . ,tool-results)
      (gptel--display-tool-results tool-results info)
      ;; Adjust for tool calls inside reasoning blocks

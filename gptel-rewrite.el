@@ -565,10 +565,13 @@ INFO is the async communication channel for the rewrite request."
         (kill-buffer proc-buf))
       (delete-overlay ov))
 
-     ((eq (car-safe response) 'tool-call) ;tool call confirmation
+     ((and (eq (car-safe response) 'tool-call) ;tool call confirmation
+           ;; Only entries awaiting confirmation are actionable here.
+           (gptel--pending-tool-calls (cdr response)))
       (gptel--rewrite-update-status ov " Run tools?" '(mode-line-emphasis default))
       (gptel--display-tool-calls   ;use minibuffer
-       (cdr response) info         ;; (buffer-local-value 'buffer-read-only buf)
+       (gptel--pending-tool-calls (cdr response))
+       info                        ;; (buffer-local-value 'buffer-read-only buf)
        t))
 
      ((null response)                   ;finished with error

@@ -1958,7 +1958,13 @@ inside the callback could revive the request."
       (let ((result (gptel--sanitize-string (gptel--to-string result))))
         ;; FIXME(tool-hooks): If a hook has changed the tool that was called
         ;; tool-spec needs to be updated.
-        (push (list tool-spec (plist-get tool-call :args) result)
+        ;; Include the tool-call plist (carries the wire :id) as a fourth
+        ;; element so callbacks can correlate each result with the call
+        ;; that produced it.  All existing consumers of the tool-result
+        ;; event destructure only the first three elements and ignore the
+        ;; extra one.  (Mirrors the same addition to pending tool-call
+        ;; entries in `gptel--handle-tool-use'.)
+        (push (list tool-spec (plist-get tool-call :args) result tool-call)
               tool-result-alist)
         (plist-put info :tool-result tool-result-alist) ;for the callback
         ;; NOTE: tool-call is a member of (plist-get info :tool-use), so :tool-use
@@ -1973,6 +1979,16 @@ inside the callback could revive the request."
                                      (plist-get info :tool-processes))))
       ;; All tools have run
       (when (<= (cl-decf remaining) 0) (gptel--fsm-transition fsm)))))
+
+(defun gptel--pending-tool-calls (tool-calls)
+  "Return the entries of TOOL-CALLS that await user confirmation.
+
+TOOL-CALLS is the payload of a `tool-call' callback event: a list of
+entries of the form (TOOL-SPEC ARGS CONTINUATION TOOL-CALL).  Entries
+with a nil CONTINUATION are pre-execution notifications for
+auto-approved calls and are not actionable, so confirmation UIs must
+skip them."
+  (cl-remove-if-not (lambda (call) (nth 2 call)) tool-calls))
 
 (defun gptel--handle-tool-use (fsm)
   "Run tool calls captured in FSM, and advance the state machine with the results."
@@ -2016,6 +2032,16 @@ inside the callback could revive the request."
                      ;; elements and ignore the extra one.
                      (push (list tool-spec args process-tool-result tool-call)
                            pending-calls)
+                   ;; Auto-approved call: notify the callback before
+                   ;; executing it, so that EVERY tool call reaches the
+                   ;; callback pre-execution (not just the ones awaiting
+                   ;; confirmation).  The continuation slot is nil, which
+                   ;; marks the entry as "notification only, nothing to
+                   ;; confirm"; use `gptel--pending-tool-calls' to select
+                   ;; the entries that actually await confirmation.
+                   (funcall (plist-get info :callback)
+                            (list 'tool-call (list tool-spec args nil tool-call))
+                            info)
                    (if-let* ((err (gptel--validate-tool-args tool-spec args)))
                        (funcall process-tool-result err)
                      (let ((arg-values (gptel--map-tool-args tool-spec args))

@@ -1655,7 +1655,9 @@ This sets the variable `gptel-include-tool-results', which see."
             (lambda (resp info &optional _raw)
               (pcase resp
                 ((pred stringp) (message "%s response: %s" backend-name resp))
-                (`(tool-call . ,tool-calls) (gptel--display-tool-calls tool-calls info 'minibuffer))
+                (`(tool-call . ,tool-calls) ;only confirmation-pending entries are actionable
+                 (when-let* ((pending (gptel--pending-tool-calls tool-calls)))
+                   (gptel--display-tool-calls pending info 'minibuffer)))
                 (_ (when (and (null resp) (plist-get info :error))
                      (message "%s response error: %s"
                               backend-name (plist-get info :status))))))))
@@ -1671,7 +1673,9 @@ This sets the variable `gptel-include-tool-results', which see."
                      (kill-new (apply #'concat (nreverse accum)))
                      (message "%s response: \"%s\" copied to kill-ring." backend-name
                               (truncate-string-to-width resp 30 nil nil t))))
-                  (`(tool-call . ,tool-calls) (gptel--display-tool-calls tool-calls info 'minibuffer))
+                  (`(tool-call . ,tool-calls) ;only confirmation-pending entries are actionable
+                   (when-let* ((pending (gptel--pending-tool-calls tool-calls)))
+                     (gptel--display-tool-calls pending info 'minibuffer)))
                   (_ (when (and (null resp) (plist-get info :error))
                        (if accum (kill-new (apply #'concat (nreverse accum))))
                        (message
