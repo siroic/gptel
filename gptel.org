@@ -1,5 +1,26 @@
 #+SEQ_TODO: GLOB READ INSERT EDIT WRITE GREP EVAL BASH GATHER GATHERING GATHERED EXECUTE EXECUTING EXECUTED RESEARCH RESEARCHING RESEARCHED DEEP-RESEARCH DEEP-RESEARCHING DEEP-RESEARCHED IMPLEMENT IMPLEMENTING IMPLEMENTED INTROSPECT INTROSPECTING INTROSPECTED TODO(t) AI-DO(a) AI-DOING(i) DOING FEEDBACK(f) DENIED(d@) PENDING(p) ALLOWED(A)  AI_FEEDBACK RESPOND RESPONDING REASON REASONING | AI-DONE(d) DONE(D) ARCHIVED(r) CANCELED(c) RESPONDED REASONED
 * MUST READ
+** Test submodule (=test/= → gitea =gptel-test.git=) push/pull
+- =test/= is a git submodule (=.gitmodules= name =gptel-test=,
+  upstream =https://github.com/karthink/gptel-test.git=).  The
+  submodule checkout has its own remotes:
+  - =gitea=  → =gitea@intranet.siroic.com:external/gptel-test.git=
+    (our fork; branches =orga=, =orga-stable=, =main=)
+  - =origin= → =git@github.com:karthink/gptel-test.git= (upstream)
+- Push and pull the submodule *from inside* =test/=:
+  : git -C ~/gptel/test pull gitea orga
+  : git -C ~/gptel/test push gitea orga
+- NEVER add a =gptel-test= remote to the *parent* repo and push the
+  parent branch to it.  =git -C ~/gptel push gptel-test orga= pushes
+  gptel's own history into the gptel-test repository — the two
+  histories are unrelated, so the push is rejected non-fast-forward
+  (and would corrupt the test repo if forced).  Such a parent-repo
+  remote existed and was removed as a footgun.
+- After committing in the submodule, bump the submodule pointer in
+  the parent repo (=git -C ~/gptel add test= + commit) so parent and
+  test branches stay paired.
+- =~/gptel-stable/test= is a second checkout of the same submodule;
+  a detached HEAD at the recorded pointer commit there is normal.
 * Future plans
 * TODOs
 ** AI-DONE Prefer modified visiting buffer over disk in file-based context
