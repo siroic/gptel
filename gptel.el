@@ -263,36 +263,6 @@ to the LLM, and after a text insertion."
   :type 'hook
   :group 'gptel)
 
-(defcustom gptel-pre-reasoning-hook nil
-  "Hook run before the first reasoning chunk is inserted.
-
-This hook is called in the response buffer with point at the
-reasoning insertion location, just before the opening reasoning
-fence (e.g. `#+begin_reasoning') is inserted.  Each function
-takes no arguments.
-
-The hook only runs when reasoning content is being inserted into
-the response buffer; it does not run when
-`gptel-include-reasoning' (or the request-level
-`:include-reasoning') is nil or names a separate buffer."
-  :type 'hook
-  :group 'gptel)
-
-(defcustom gptel-post-reasoning-hook nil
-  "Hook run after the last reasoning chunk has been inserted.
-
-The reasoning stream has ended and the closing reasoning fence
-(e.g. `#+end_reasoning') has been written, but no subsequent
-response content has been inserted yet.  Runs in the response
-buffer.  Each function takes no arguments.
-
-The hook only runs when reasoning content is being inserted into
-the response buffer; it does not run when
-`gptel-include-reasoning' (or the request-level
-`:include-reasoning') is nil or names a separate buffer."
-  :type 'hook
-  :group 'gptel)
-
 (defcustom gptel-pre-tool-call-functions nil
   "Abnormal hook called before each tool call.
 
@@ -1854,13 +1824,10 @@ Optional RAW disables text properties and transformation."
                                    (plist-get info :include-reasoning))
                (save-excursion (goto-char (point-max)) (insert text)))
            (with-current-buffer (marker-buffer start-marker)
-             (run-hooks 'gptel-pre-reasoning-hook)
              (cond
-              ;; org-mode: REASONED heading stores reasoning structurally.
-              ;; The pre-reasoning hook (siro-gptel-hooks) has redirected
-              ;; insertion into an indirect buffer pointing at the REASONED
-              ;; heading body, so we just insert the raw text.  No fences,
-              ;; no 'gptel 'ignore property.
+              ;; org-mode: REASONED heading stores reasoning structurally,
+              ;; so we just insert the raw text.  No fences, no
+              ;; 'gptel 'ignore property.
               ((derived-mode-p 'org-mode)
                (gptel--insert-response text info))
               ;; non-org: legacy fence + property path.
@@ -1889,8 +1856,7 @@ Optional RAW disables text properties and transformation."
                  (save-excursion
                    (goto-char (plist-get info :tracking-marker))
                    (when (re-search-backward "^```" start-marker t)
-                     (gptel-markdown-cycle-block))))))
-             (run-hooks 'gptel-post-reasoning-hook)))))
+                     (gptel-markdown-cycle-block))))))))))
       (`(tool-call . ,tool-calls)
        ;; Only entries awaiting confirmation are actionable here.
        (when-let* ((pending (gptel--pending-tool-calls tool-calls)))
@@ -2020,16 +1986,11 @@ for streaming responses only."
              (start-marker (plist-get info :position)))
         (with-current-buffer (marker-buffer start-marker)
           (cond
-           ;; org-mode: REASONED heading is the structure.  The pre/post
-           ;; reasoning hooks (siro-gptel-hooks) open/close an indirect
-           ;; buffer pointing at the REASONED heading body, into which
-           ;; raw streamed text is inserted.  No fences, no properties.
+           ;; org-mode: REASONED heading is the structure.  Raw streamed
+           ;; text is inserted directly; downstream machinery is
+           ;; responsible for placing it.  No fences, no properties.
            ((derived-mode-p 'org-mode)
-            (if (eq text t)             ;end of stream
-                (run-hooks 'gptel-post-reasoning-hook)
-              (unless (and reasoning-marker tracking-marker
-                           (= reasoning-marker tracking-marker))
-                (run-hooks 'gptel-pre-reasoning-hook))
+            (unless (eq text t)         ;end of stream
               (gptel-curl--stream-insert-response text info)))
            ;; non-org: legacy fence + property path.
            (t
@@ -2046,11 +2007,9 @@ for streaming responses only."
                     (save-excursion
                       (goto-char tracking-marker)
                       (when (re-search-backward "^```" start-marker t)
-                        (gptel-markdown-cycle-block))))
-                  (run-hooks 'gptel-post-reasoning-hook))
+                        (gptel-markdown-cycle-block)))))
               (unless (and reasoning-marker tracking-marker
                            (= reasoning-marker tracking-marker))
-                (run-hooks 'gptel-pre-reasoning-hook)
                 (let ((separator    ;Separate from response prefix if required
                        (and (not tracking-marker) gptel-mode
                             (not (string-suffix-p
