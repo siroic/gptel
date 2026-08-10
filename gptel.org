@@ -23,6 +23,61 @@
   a detached HEAD at the recorded pointer commit there is normal.
 * Future plans
 * TODOs
+** AI-DO Update gptel from upstream and plan fork retirement
+*** Origin
+urho — request "Update gptel to latest version from origin"; the goal
+is to get rid of the gptel fork so gptel can be updated easily.
+*** Current state (measured on feature/gptel-callback-migration)
+- =orga= is 73 commits ahead / 38 behind =origin/master=
+  (merge-base =6bb7a6f= 2026-06-14; upstream tip =fc69636=
+  "gptel-org: Support GPTEL_PRESET property" 2026-08-04).
+- =feature/gptel-callback-migration= = =orga= + 3 commits
+  (=dab5f74= wire-id callback delivery, =c6a46e5= / =cfc07b9=
+  reverts of fork-only hook commits).
+- Trial merge of =origin/master= into =orga= (temp worktree,
+  aborted): 4 content conflicts, one hunk each — =NEWS=,
+  =gptel-anthropic.el=, =gptel-org.el=, =gptel-request.el= — plus
+  the =test= submodule pointer.
+- Post-callback-migration fork surface (what still forces the fork):
+  - KEPT per divergence ledger: =387a94d= (tool-call plist in
+    pending confirmations), =dab5f74= (wire-id in :callback tool
+    delivery), =b74449a= (gptel-abort REASON/CAUSE), =67090c1=
+    (kill tool subprocesses on abort), =116b15f=
+    (=gptel--current-fsm= binding).
+  - Not yet in the ledger: =4d094f7= (=gptel--current-tool-call=),
+    =e8fb320= (pre-tool hook error propagation), =279e9aa= (empty
+    reasoning suppression), =7b5fce6= (tool-result sanitization),
+    =3fd6d68= (=gptel-tool= org-output slot), =004ba1a=
+    (gptel-tool src blocks), model additions, and several reverts
+    of upstream features (adaptive thinking, sentence boundary).
+*** Options
+- Phase A — update now (routine, low risk):
+  Merge =origin/master= into the feature branch (one-way, per the
+  documented fork strategy), resolve the 4 single-hunk conflicts +
+  submodule pointer, run the test suite.  Upstream brings in native
+  GPTEL_PRESET org support, which likely supersedes our =AI-DONE
+  Apply GPTEL_PRESET...= change (the =gptel-org.el= conflict).
+- Phase B — fork retirement (needs per-commit decisions):
+  For each remaining fork commit choose one of:
+  1. Upstream it — open a PR to karthink/gptel (best candidates:
+     =7b5fce6= tool-result sanitization, =67090c1= subprocess kill
+    on abort, =279e9aa= empty-reasoning suppression — all generic
+    bug fixes/robustness).
+  2. Reimplement in siro-orga on top of vanilla gptel where the
+     public =gptel-request= contract allows it.
+  3. Drop it if superseded by upstream or no longer consumed.
+  End state: =orga= == =origin/master=, gptel installed as a plain
+  upstream checkout; siro-orga carries all behaviour via the
+  =gptel-request= callback API.
+- Recommended: do Phase A immediately; treat Phase B as a
+  follow-up TODO with a per-commit decision table for user review.
+*** Mission
+Bring the fork up to date with upstream now, and produce the
+per-commit retirement plan that ends with no fork at all.
+*** TODOs
+**** AI-DO Phase A: merge origin/master into feature branch and resolve conflicts
+**** AI-DO Phase B: build per-commit fork-retirement decision table for user review
+*** Outcomes / Results
 ** AI-DONE Prefer modified visiting buffer over disk in file-based context
 CLOSED: in commit 8a72b7f on branch orga
 *** Origin
