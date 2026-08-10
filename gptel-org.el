@@ -192,6 +192,13 @@ on a line by themselves, separated from surrounding text."
   (concat "\\(?:" org-link-bracket-re "\\|" org-link-angle-re "\\)")
   "Link regex for `gptel-mode' in Org mode.")
 
+;; TODO(preset): This is a hack.  We need a better way to propagate the value of
+;; the GPTEL_PRESET property all the way to the request augmentation block in
+;; `gptel-request'.
+(defvar gptel-org--presets nil
+  "Presets specified in the Org property GPTEL_PRESET.
+Meant for internal use only.")
+
 
 ;;; Setting context and creating queries
 (defun gptel-org--get-topic-start ()
@@ -290,6 +297,11 @@ depend on the value of `gptel-org-branching-context', which see."
                            (buffer-local-value 'gptel-org-ignore-elements
                                                org-buf)))
                 (gptel-org--strip-elements))
+              (when gptel-org--presets  ;let-bound to the Org prop GPTEL_PRESET
+                (mapc (lambda (preset)       ;by `gptel-org--send-with-props'
+                        (gptel--apply-preset
+                         preset (lambda (sym val) (set (make-local-variable sym) val))))
+                      gptel-org--presets))
               (setq org-complex-heading-regexp ;For org-element-context to run
                     (buffer-local-value 'org-complex-heading-regexp org-buf))
               (setq tab-width      ;Match source indentation for list parsing
@@ -305,6 +317,11 @@ depend on the value of `gptel-org-branching-context', which see."
                        (buffer-local-value 'gptel-org-ignore-elements
                                            org-buf)))
                 (gptel-org--strip-elements))
+          (when gptel-org--presets      ;let-bound to the Org prop GPTEL_PRESET
+            (mapc (lambda (preset)           ;by `gptel-org--send-with-props'
+                    (gptel--apply-preset
+                     preset (lambda (sym val) (set (make-local-variable sym) val))))
+                  gptel-org--presets))
           (setq org-complex-heading-regexp ;For org-element-context to run
                 (buffer-local-value 'org-complex-heading-regexp org-buf))
           (setq tab-width      ;Match source indentation for list parsing
@@ -425,7 +442,9 @@ first nil value in REST is guaranteed to be correct."
                         (member link-type '("http" "https" "ftp")) 'url)))
               (path (org-element-property :path link))
               (user-check (funcall gptel-org-validate-link link))
-              (readablep (or (eq resource-type 'url) (file-remote-p path)
+              (readablep (or (eq resource-type 'url)
+                             (file-remote-p default-directory)
+                             (file-remote-p path)
                              (file-readable-p path)))
               (mime-valid
                (or (eq resource-type 'url)
@@ -528,46 +547,17 @@ configuration, use that for requests instead.  This includes the
 system message, model and provider (backend), among other
 parameters.
 
-When the heading declares =GPTEL_PRESET=, the preset is expanded
-and its values are used unless the heading also sets an explicit
-=GPTEL_*= property for the same setting.  Priority for each
-setting is: org explicit property > preset value > buffer
-default.
-
 ARGS are the original function call arguments."
   (if (derived-mode-p 'org-mode)
-      (pcase-let*
-          ((`(,org-preset ,org-system ,org-backend ,org-model
-              ,org-temperature ,org-tokens ,org-num ,org-tools)
-            (gptel-org--entry-properties))
-           (`(,preset-system ,preset-backend ,preset-model
-              ,preset-temperature ,preset-tokens ,preset-num ,preset-tools)
-            (if org-preset
-                (let (p-system p-backend p-model
-                      p-temperature p-tokens p-num p-tools)
-                  (gptel--apply-preset
-                   org-preset
-                   (lambda (sym val)
-                     (pcase sym
-                       ('gptel-system-prompt         (setq p-system val))
-                       ('gptel-backend               (setq p-backend val))
-                       ('gptel-model                 (setq p-model val))
-                       ('gptel-temperature           (setq p-temperature val))
-                       ('gptel-max-tokens            (setq p-tokens val))
-                       ('gptel--num-messages-to-send (setq p-num val))
-                       ('gptel-tools                 (setq p-tools val)))))
-                  (list p-system p-backend p-model
-                        p-temperature p-tokens p-num p-tools))
-              (list nil nil nil nil nil nil nil)))
-           (gptel--preset         (or org-preset      gptel--preset))
-           (gptel-system-prompt   (or org-system      preset-system      gptel-system-prompt))
-           (gptel-backend         (or org-backend     preset-backend     gptel-backend))
-           (gptel-model           (or org-model       preset-model       gptel-model))
-           (gptel-temperature     (or org-temperature preset-temperature gptel-temperature))
-           (gptel-max-tokens      (or org-tokens      preset-tokens      gptel-max-tokens))
-           (gptel--num-messages-to-send
-            (or org-num preset-num gptel--num-messages-to-send))
-           (gptel-tools           (or org-tools       preset-tools       gptel-tools)))
+      (cl-destructuring-bind
+          ( gptel-org--presets gptel-system-prompt gptel-backend
+            gptel-model gptel-temperature gptel-max-tokens
+            gptel--num-messages-to-send gptel-tools)
+          (seq-mapn (lambda (a b) (or a b))
+                    (gptel-org--entry-properties)
+                    (list gptel-org--presets gptel-system-prompt gptel-backend
+                          gptel-model gptel-temperature gptel-max-tokens
+                          gptel--num-messages-to-send gptel-tools))
         (apply send-fun args))
     (apply send-fun args)))
 
@@ -584,13 +574,14 @@ ARGS are the original function call arguments."
 (defun gptel-org--entry-properties (&optional pt)
   "Find gptel configuration properties stored at PT."
   (pcase-let
-      ((`(,preset ,system ,backend ,model ,temperature ,tokens ,num ,tools)
+      ((`(,presets ,system ,backend ,model ,temperature ,tokens ,num ,tools)
          (mapcar
           (lambda (prop) (org-entry-get (or pt (point)) prop 'selective))
           '("GPTEL_PRESET" "GPTEL_SYSTEM" "GPTEL_BACKEND"
             "GPTEL_MODEL" "GPTEL_TEMPERATURE" "GPTEL_MAX_TOKENS"
             "GPTEL_NUM_MESSAGES_TO_SEND" "GPTEL_TOOLS"))))
-    (when preset (setq preset (gptel--intern preset)))
+    (when presets
+      (setq presets (mapcar #'intern (split-string presets))))
     (when system
       (setq system (string-replace "\\n" "\n" system)))
     (when backend
@@ -610,7 +601,7 @@ ARGS are the original function call arguments."
                    (display-warning
                     '(gptel org tools)
                     (format "Tool %s not found, ignoring" tname)))))
-    (list preset system backend model temperature tokens num tools)))
+    (list presets system backend model temperature tokens num tools)))
 
 (defun gptel-org--restore-state ()
   "Restore gptel state for Org buffers when turning on `gptel-mode'."
