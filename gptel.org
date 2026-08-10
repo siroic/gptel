@@ -71,13 +71,102 @@ is to get rid of the gptel fork so gptel can be updated easily.
   =gptel-request= callback API.
 - Recommended: do Phase A immediately; treat Phase B as a
   follow-up TODO with a per-commit decision table for user review.
+**** FEEDBACK Drop all fork commits and use vanilla gptel
+We will reimplement the features later as we need
+**** AI-FEEDBACK Dropping the fork is viable, but only with a siro-orga-side compatibility shim
+A dependency inventory across =~/siro-orga= and =~/gptel-agent= was
+run before acting.  A naive "drop all fork commits" breaks the
+workspace: siro-orga consumes 73 distinct private =gptel--= symbols
+across ~600 call sites, and six of them exist ONLY in the fork.
+
+***** Hard fork-only dependencies (break immediately on vanilla)
+- =gptel--current-fsm= (=116b15f=) — dynamic binding around hook /
+  FSM dispatch.  ~20 production sites in =siro-gptel-hooks.el= and
+  =siro-orga-send.el=; the whole hooks layer locates the current
+  request's FSM through it.  Hardest single dependency.
+- =gptel--current-tool-call= (=4d094f7=) — 6 production sites;
+  required by the subagent-launch wire-id resolution at
+  =siro-orga-send.el:1250=.
+- Wire-id tool-call plist keys =:id= / =:name= / =:args=
+  (=387a94d= + =dab5f74=) — the entire per-wire-id tool routing
+  (tool IBs, pending-tool registry, segment tracking) is keyed on
+  these.  ~98 references.
+- =gptel-tool= =org-output= slot (=3fd6d68=) — a struct slot, so
+  unreachable by advice.  ~15 production sites plus a dedicated
+  test suite at =test/siro-gptel-hooks-test.el:3130=.
+- =gptel-abort= REASON / CAUSE (=b74449a=) — 5 sites in siro-orga,
+  2 in =gptel-agent-tools.el:1554=.
+- =gptel--sanitize-string= (=7b5fce6=) — used by the gptel-agent
+  Eval tool (=gptel-agent-tools.el:1693,1698=).
+
+***** Genuinely droppable now (zero production consumers)
+- =e8fb320= pre-tool hook error propagation — doc mention only.
+- Fork-only hooks =gptel-{pre,post}-{tool-call,reasoning}-hook= —
+  already reverted; production code uses the upstream
+  =...-functions= abnormal hooks instead.
+- =004ba1a= gptel-tool src blocks — the =#+begin_src gptel-tool=
+  convention is implemented entirely inside siro-orga
+  (=siro-gptel-headings.el:1521=), no fork API consumed.
+- =279e9aa= empty-reasoning suppression — one test depends on it;
+  siro-orga already has a partial workaround.
+
+***** Recommended reading of the feedback
+"Reimplement the features later as we need" is exactly a
+*compatibility shim in siro-orga*: gptel becomes a plain upstream
+checkout with zero patches, and siro-orga carries the six missing
+behaviours as advice + let-bindings around the public
+=gptel-request= contract.  Concretely:
+- =gptel--current-fsm= / =gptel--current-tool-call= → defvar them
+  in siro-orga and let-bind them from =:around= advice on the
+  gptel FSM handlers.
+- Wire-id plist keys → recover the id from the backend tool-call
+  data inside advice on =gptel--handle-tool-use=.
+- =org-output= slot → replace with a siro-orga-side registry
+  (tool name → org-output flag) instead of a struct slot.
+- =gptel-abort= REASON/CAUSE → =:around= advice storing the
+  reason/cause in siro's own state before delegating.
+- =gptel--sanitize-string= → move the function into gptel-agent.
+This delivers the user's goal (no fork, easy upstream updates)
+without a flag-day breakage, and each shim can later be replaced
+by an upstream PR.
+
+***** Status of Phase A
+Phase A is already DONE locally: =bc5a2ea= merges upstream
+=fc69636= into =feature/gptel-callback-migration= (17 files, +743
+/ -405), working tree clean.  It was unpushed; the earlier
+=pull --rebase= "conflict" was only rebase trying to flatten that
+merge commit, and it aborted without loss.  If the fork is retired
+this merge becomes moot, but it is harmless and is pushed as-is.
+
+***** Open decision for the user
+- Option 1 — /shim now/ (recommended): reset =orga= to
+  =origin/master=, install vanilla gptel, land the six shims in
+  siro-orga in one feature branch, keep the existing test suite
+  green as the acceptance gate.
+- Option 2 — /upstream first/: open PRs to karthink/gptel for the
+  three clean generic candidates (=7b5fce6= sanitization,
+  =67090c1= subprocess kill on abort, =b74449a= abort
+  REASON/CAUSE), shim only the rest.  Slower, but ends with a
+  smaller shim.
+- Option 3 — /hard drop/ (as literally stated in the feedback):
+  reset to vanilla immediately and accept that siro-orga tool
+  routing, subagent launch, and org-output handling are broken
+  until reimplemented.  Not recommended — no incremental path and
+  no green test suite in between.
 *** Mission
 Bring the fork up to date with upstream now, and produce the
 per-commit retirement plan that ends with no fork at all.
 *** TODOs
-**** AI-DO Phase A: merge origin/master into feature branch and resolve conflicts
+**** AI-DONE Phase A: merge origin/master into feature branch and resolve conflicts
 **** AI-DO Phase B: build per-commit fork-retirement decision table for user review
 *** Outcomes / Results
+- Phase A complete: =bc5a2ea= merges upstream =fc69636= into
+  =feature/gptel-callback-migration= (17 files, +743 / -405).
+  Conflicts in =NEWS=, =gptel-anthropic.el=, =gptel-org.el=,
+  =gptel-request.el= and the =test= submodule pointer were
+  resolved in that commit.
+- Phase B superseded by the =AI-FEEDBACK= analysis above: the
+  per-commit decision table is replaced by the six-item shim plan.
 ** AI-DONE Prefer modified visiting buffer over disk in file-based context
 CLOSED: in commit 8a72b7f on branch orga
 *** Origin
