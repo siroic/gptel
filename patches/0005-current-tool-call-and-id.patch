@@ -1,0 +1,197 @@
+From 6b2bd2d1770270d9aa2f3e6b8abb221f6d5d3865 Mon Sep 17 00:00:00 2001
+From: Urho Laurinen <urho.laurinen@siroic.com>
+Date: Wed, 12 Aug 2026 12:00:00 +0300
+Subject: [PATCH 05/12] gptel: Make the wire tool-call id available to tool hooks and callbacks
+
+A tool call carries a provider-assigned :id on the wire, and gptel
+tracks it internally, but nothing outside gptel can see it.  That makes
+it impossible for a hook or a confirmation UI to correlate a call with
+its result, to deduplicate retried calls, or to key external state (a
+log entry, an org drawer, a UI row) to a specific call.
+
+Three minimal additions:
+
+* `gptel--current-tool-call' -- the tool-call plist, dynamically bound
+  around each tool function invocation so tool functions and advice can
+  see which call they are serving.
+* The pending-calls entries handed to the callback for confirmation gain
+  the tool-call plist as a fourth element.  Existing consumers
+  destructure only the first three and are unaffected.
+* The plists passed to `gptel-pre-tool-call-functions' and
+  `gptel-post-tool-call-functions' gain :id.
+
+Tests: tests/gptel-current-tool-call-and-id-test.el (standalone; extracted from the fork's characterization
+suite).
+---
+diff --git a/gptel-request.el b/gptel-request.el
+index fc5115c..fc59485 100644
+--- a/gptel-request.el
++++ b/gptel-request.el
+@@ -758,6 +758,12 @@ These parameters are combined with model-specific and backend-specific
+ incompatible with the active backend can break gptel.  Do not use this
+ variable unless you know what you're doing!")
+ 
++(defvar gptel--current-tool-call nil
++  "The tool-call plist (:name :args :id ...) currently being invoked.
++Dynamically bound around each tool function call in
++`gptel--handle-tool-use' so tool functions / their advice can correlate
++the call with its wire :id.  nil outside a tool invocation.")
++
+ (defconst gptel--ersatz-json-tool "response_json"
+   "Name of ersatz tool used to force JSON output.
+ 
+@@ -1982,8 +1988,15 @@ injects the results into the prompt data and transitions the FSM."
+                                   (apply confirm (gptel--map-tool-args tool-spec args))))))
+                    (setq confirm t)))
+                  (if confirm  ;To send to callback for confirmation
+-                     (push (list tool-spec args process-tool-result) pending-calls)
+-                   (let ((arg-values (gptel--map-tool-args tool-spec args)))
++                     ;; Include the tool-call plist (carries :id) so
++                     ;; downstream confirmation UIs can correlate each
++                     ;; pending call with its wire id.  All existing
++                     ;; consumers destructure only the first three
++                     ;; elements and ignore the extra one.
++                     (push (list tool-spec args process-tool-result tool-call)
++                           pending-calls)
++                   (let ((arg-values (gptel--map-tool-args tool-spec args))
++                         (gptel--current-tool-call tool-call))
+                      (if (gptel-tool-async tool-spec) ;If not, run the tool
+                          (apply (gptel-tool-function tool-spec)
+                                 process-tool-result arg-values)
+diff --git a/gptel.el b/gptel.el
+index 16110c4..0e43298 100644
+--- a/gptel.el
++++ b/gptel.el
+@@ -1506,9 +1506,10 @@ Perform UI updates and run post-response hooks."
+                (dolist (tool-call tool-use)
+                  (let* ((name (plist-get tool-call :name))
+                         (args (plist-get tool-call :args))
++                        (id   (plist-get tool-call :id))
+                         (hook-func-result
+                          (with-demoted-errors "gptel-pre-tool-call hook error: %S"
+-                           (funcall hook-func (nconc (list :name name :args args)
++                           (funcall hook-func (nconc (list :name name :args args :id id)
+                                                      hook-func-args)))))
+                    (if (plist-get hook-func-result :stop) ; Stop the request immediately
+                        (let ((reason (or (plist-get hook-func-result :stop-reason)
+@@ -1564,10 +1565,11 @@ Perform UI updates and run post-response hooks."
+                (dolist (tool-call (plist-get info :tool-use))
+                  (let* ((name (plist-get tool-call :name))
+                         (args (plist-get tool-call :args))
++                        (id   (plist-get tool-call :id))
+                         (hook-func-result
+                          (with-demoted-errors "gptel-post-tool-call hook error: %S"
+                            (funcall hook-func
+-                                    (nconc (list :name name :args args
++                                    (nconc (list :name name :args args :id id
+                                                  :result (plist-get tool-call :result))
+                                            hook-func-args)))))
+                    (if (plist-get hook-func-result :stop)
+diff --git a/tests/gptel-current-tool-call-and-id-test.el b/tests/gptel-current-tool-call-and-id-test.el
+new file mode 100644
+index 0000000..077cd20
+--- /dev/null
++++ b/tests/gptel-current-tool-call-and-id-test.el
+@@ -0,0 +1,100 @@
++;;; gptel-current-tool-call-and-id-test.el --- Tests for gptel--current-tool-call and tool-call :id -*- lexical-binding: t; -*-
++
++;;; Commentary:
++
++;; Pins two related behaviours:
++;;
++;; 1. `gptel--current-tool-call' is dynamically bound to the current
++;;    tool-call plist while a tool's function runs, and is nil outside.
++;; 2. The plists passed to `gptel-pre-tool-call-functions' and
++;;    `gptel-post-tool-call-functions' include the tool call's :id
++;;    (and, for the post hook, its :result).
++;;
++;; Batch-safe: no network access, no real LLM calls.
++
++;;; Code:
++
++(require 'ert)
++(require 'cl-lib)
++(require 'gptel)
++
++(defun gptel-fork-test--tool (&rest args)
++  "Make a gptel-tool via the internal constructor (no global registration)."
++  (apply #'gptel--make-tool-internal args))
++
++
++;;;; gptel--current-tool-call
++
++(ert-deftest gptel-fork-current-tool-call-bound-during-tool-invocation ()
++  "`gptel--current-tool-call' is bound to the tool-call plist during the call."
++  (should-not gptel--current-tool-call)
++  (let* ((buf (generate-new-buffer " *gptel-fork-test-tool*"))
++         (captured nil)
++         (gptel-confirm-tool-calls nil)
++         (tool (gptel-fork-test--tool
++                :name "test_tool" :description "d"
++                :args '((:name "location" :type string :description "d"))
++                :function (lambda (_location)
++                            (setq captured (copy-sequence gptel--current-tool-call))
++                            "ok")))
++         (tool-call (list :name "test_tool" :args (list :location "Paris")
++                          :id "call_42"))
++         (info (list :backend 'stub-backend :buffer buf
++                     :tools (list tool) :tool-use (list tool-call)))
++         (fsm (gptel-make-fsm :state 'TOOL :table nil :handlers nil :info info)))
++    (unwind-protect
++        (progn
++          (gptel--handle-tool-use fsm)
++          (should captured)
++          (should (equal (plist-get captured :id) "call_42"))
++          (should (equal (plist-get captured :name) "test_tool")))
++      (when (buffer-live-p buf) (kill-buffer buf))))
++  (should-not gptel--current-tool-call))
++
++
++;;;; :id in tool-call hook plists
++
++(ert-deftest gptel-fork-pre-tool-call-hook-receives-id ()
++  "`gptel-pre-tool-call-functions' receives a plist including the :id."
++  (let ((buf (generate-new-buffer " *gptel-fork-test-pre-tool*"))
++        (captured nil))
++    (unwind-protect
++        (progn
++          (with-current-buffer buf
++            (setq-local gptel-pre-tool-call-functions
++                        (list (lambda (pl) (setq captured (copy-sequence pl)) nil))))
++          (let* ((tool-call (list :name "test_tool" :args (list :a 1) :id "call_42"))
++                 (info (list :buffer buf :backend "be" :model "mo"
++                             :tool-use (list tool-call)))
++                 (fsm (gptel-make-fsm :state 'TOOL :table nil :handlers nil
++                                      :info info)))
++            (gptel--handle-pre-tool fsm)
++            (should captured)
++            (should (equal (plist-get captured :id) "call_42"))
++            (should (equal (plist-get captured :name) "test_tool"))
++            (should (equal (plist-get captured :args) (list :a 1)))))
++      (when (buffer-live-p buf) (kill-buffer buf)))))
++
++(ert-deftest gptel-fork-post-tool-call-hook-receives-id ()
++  "`gptel-post-tool-call-functions' receives a plist with :id and :result."
++  (let ((buf (generate-new-buffer " *gptel-fork-test-post-tool*"))
++        (captured nil))
++    (unwind-protect
++        (progn
++          (with-current-buffer buf
++            (setq-local gptel-post-tool-call-functions
++                        (list (lambda (pl) (setq captured (copy-sequence pl)) nil))))
++          (let* ((tool-call (list :name "test_tool" :args (list :a 1)
++                                  :id "call_42" :result "ok"))
++                 (info (list :buffer buf :backend "be" :model "mo"
++                             :tool-use (list tool-call)))
++                 (fsm (gptel-make-fsm :state 'TOOL :table nil :handlers nil
++                                      :info info)))
++            (gptel--handle-post-tool fsm)
++            (should captured)
++            (should (equal (plist-get captured :id) "call_42"))
++            (should (equal (plist-get captured :result) "ok"))))
++      (when (buffer-live-p buf) (kill-buffer buf)))))
++
++(provide 'gptel-current-tool-call-and-id-test)
++;;; gptel-current-tool-call-and-id-test.el ends here
+-- 
+2.51.0

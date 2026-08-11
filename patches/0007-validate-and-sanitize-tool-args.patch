@@ -1,0 +1,326 @@
+From 52809871f50a0d54a0d4180f17677f39569339b3 Mon Sep 17 00:00:00 2001
+From: Urho Laurinen <urho.laurinen@siroic.com>
+Date: Wed, 12 Aug 2026 12:00:00 +0300
+Subject: [PATCH 07/12] gptel: Validate tool arguments and sanitize tool results
+
+Two failure modes at the tool boundary, both of which currently break
+the request instead of being handled:
+
+* A model can omit a required argument.  gptel applies the tool function
+  anyway, so the user sees a `wrong-number-of-arguments' error (or worse,
+  a nil argument silently doing the wrong thing) instead of the model
+  getting a chance to retry.  Add `gptel--validate-tool-args', which
+  returns nil or an error string, and use it on both tool-invocation
+  paths (`gptel--handle-tool-use' and the confirmation path in
+  `gptel--accept-tool-calls').  The error string is fed back as the tool
+  result, so the model can correct itself.  `plist-member' is used so an
+  argument explicitly set to nil/false counts as present.
+
+* A tool result can contain raw-byte characters (a tool reading a process
+  or a buffer with binary content).  Those are not valid Unicode, so
+  `json-serialize' signals `wrong-type-argument' when the next request is
+  encoded, killing the turn with an error unrelated to anything the user
+  did.  Add `gptel--sanitize-string', which replaces raw bytes with
+  readable \xNN escapes (and returns the same object when there is
+  nothing to escape), and apply it to tool results.
+
+Tests: tests/gptel-validate-and-sanitize-tool-args-test.el (standalone; extracted from the fork's characterization
+suite).
+---
+diff --git a/gptel-request.el b/gptel-request.el
+index fc5115c..8d570d2 100644
+--- a/gptel-request.el
++++ b/gptel-request.el
+@@ -980,6 +980,32 @@ and \"apikey\" as USER."
+     (string s)
+     (otherwise (prin1-to-string s))))
+ 
++(defun gptel--sanitize-string (s)
++  "Replace raw-byte characters in S with \\xNN escapes.
++
++Raw-byte characters are not valid Unicode, so strings containing
++them make `json-serialize' signal `wrong-type-argument'.  They can
++appear in tool results, e.g. strings read from a process or buffer
++with binary content.  In a multibyte string they are characters
++#x3FFF00..#x3FFFFF; in a unibyte string they are characters
++#x80..#xFF.  Each raw byte is replaced with the readable escape
++\\xNN, where NN is the byte's hex value.  Return S unchanged (same
++object) if it contains no raw-byte characters."
++  (let ((unibyte (not (multibyte-string-p s)))
++        (n (length s)))
++    (if (cl-loop for i below n
++                 for c = (aref s i)
++                 thereis (if unibyte
++                             (<= #x80 c #xFF)
++                           (<= #x3FFF00 c #x3FFFFF)))
++        (with-output-to-string
++          (dotimes (i n)
++            (let ((c (aref s i)))
++              (if (if unibyte (<= #x80 c #xFF) (<= #x3FFF00 c #x3FFFFF))
++                  (princ (format "\\x%02X" (if unibyte c (- c #x3FFF00))))
++                (princ (char-to-string c))))))
++      s)))
++
+ (defsubst gptel--intern (s)
+   "Intern S, if possible."
+   (cl-etypecase s
+@@ -1925,7 +1951,7 @@ injects the results into the prompt data and transitions the FSM."
+          ;; MAYBE(tool-hooks): Use plist-member for valid nil :result?
+          (remaining (cl-loop for call in (plist-get info :tool-use)
+                              count (not (plist-get call :result)))))
+-    (let ((result (gptel--to-string result)))
++    (let ((result (gptel--sanitize-string (gptel--to-string result))))
+       ;; FIXME(tool-hooks): If a hook has changed the tool that was called
+       ;; tool-spec needs to be updated.
+       (push (list tool-spec (plist-get tool-call :args) result)
+@@ -1983,20 +2009,47 @@ injects the results into the prompt data and transitions the FSM."
+                    (setq confirm t)))
+                  (if confirm  ;To send to callback for confirmation
+                      (push (list tool-spec args process-tool-result) pending-calls)
+-                   (let ((arg-values (gptel--map-tool-args tool-spec args)))
+-                     (if (gptel-tool-async tool-spec) ;If not, run the tool
+-                         (apply (gptel-tool-function tool-spec)
+-                                process-tool-result arg-values)
+-                       (let ((result (condition-case errdata
+-                                         (apply (gptel-tool-function tool-spec) arg-values)
+-                                       (error (mapconcat #'gptel--to-string errdata " ")))))
+-                         (funcall process-tool-result result)))))))))
++                   (if-let* ((err (gptel--validate-tool-args tool-spec args)))
++                       (funcall process-tool-result err)
++                     (let ((arg-values (gptel--map-tool-args tool-spec args)))
++                       (if (gptel-tool-async tool-spec) ;If not, run the tool
++                           (apply (gptel-tool-function tool-spec)
++                                  process-tool-result arg-values)
++                         (let ((result (condition-case errdata
++                                           (apply (gptel-tool-function tool-spec) arg-values)
++                                         (error (mapconcat #'gptel--to-string errdata " ")))))
++                           (funcall process-tool-result result))))))))))
+          tool-use)
+         (when pending-calls
+           (plist-put info :tool-pending t)
+           (funcall (plist-get info :callback)
+                    (cons 'tool-call pending-calls) info))))))
+ 
++(defun gptel--validate-tool-args (tool-spec args)
++  "Validate that ARGS contains all required arguments for TOOL-SPEC.
++
++TOOL-SPEC is a `gptel-tool' and ARGS is a plist of arguments for a tool
++call.  An argument is required iff its spec does not have `:optional t'.
++
++Use `plist-member' (not `plist-get') to distinguish missing arguments
++from arguments explicitly set to nil or false.
++
++Return nil if all required arguments are present.  Otherwise return an
++error string suitable for returning to the LLM as the tool result,
++listing the missing arguments and asking the model to retry."
++  (let ((missing))
++    (dolist (arg (gptel-tool-args tool-spec))
++      (let ((name (plist-get arg :name)))
++        (unless (or (plist-get arg :optional)
++                    (plist-member args (intern (concat ":" name))))
++          (push name missing))))
++    (when missing
++      (format (concat "Error: tool call to `%s' is missing required"
++                      " argument(s): %s.  Please retry the tool call"
++                      " with all required arguments.")
++              (gptel-tool-name tool-spec)
++              (mapconcat #'identity (nreverse missing) ", ")))))
++
+ (defun gptel--map-tool-args (tool-spec args)
+   "Create a tool call argument list from TOOL-SPEC and ARGS.
+ 
+diff --git a/gptel.el b/gptel.el
+index 16110c4..19670f8 100644
+--- a/gptel.el
++++ b/gptel.el
+@@ -2291,16 +2291,19 @@ overlay in the query buffer."
+     (delete-overlay ov))
+   (message "Continuing query...")
+   (cl-loop for (tool-spec arg-plist process-tool-result) in tool-calls
+-           for arg-values = (gptel--map-tool-args tool-spec arg-plist)
++           for err = (gptel--validate-tool-args tool-spec arg-plist)
+            do
+-           (if (gptel-tool-async tool-spec)
+-               (apply (gptel-tool-function tool-spec)
+-                      process-tool-result arg-values)
+-             (let ((result
+-                    (condition-case errdata
+-                        (apply (gptel-tool-function tool-spec) arg-values)
+-                      (error (mapconcat #'gptel--to-string errdata " ")))))
+-               (funcall process-tool-result result)))))
++           (if err
++               (funcall process-tool-result err)
++             (let ((arg-values (gptel--map-tool-args tool-spec arg-plist)))
++               (if (gptel-tool-async tool-spec)
++                   (apply (gptel-tool-function tool-spec)
++                          process-tool-result arg-values)
++                 (let ((result
++                        (condition-case errdata
++                            (apply (gptel-tool-function tool-spec) arg-values)
++                          (error (mapconcat #'gptel--to-string errdata " ")))))
++                   (funcall process-tool-result result)))))))
+ 
+ (defun gptel--reject-tool-calls (&optional _tool-calls ov)
+   "Cancel pending tool-calls.
+diff --git a/tests/gptel-validate-and-sanitize-tool-args-test.el b/tests/gptel-validate-and-sanitize-tool-args-test.el
+new file mode 100644
+index 0000000..15b5585
+--- /dev/null
++++ b/tests/gptel-validate-and-sanitize-tool-args-test.el
+@@ -0,0 +1,154 @@
++;;; gptel-validate-and-sanitize-tool-args-test.el --- Tests for tool arg validation and string sanitization -*- lexical-binding: t; -*-
++
++;;; Commentary:
++
++;; ERT tests for two related tool-call helpers:
++;;
++;; - `gptel--validate-tool-args', which reports missing required tool
++;;   arguments as an error string (not a signal).
++;; - `gptel--sanitize-string', which escapes raw-byte characters so tool
++;;   results can be JSON-serialized.
++;;
++;; Batch-safe: no network access, no real LLM calls.
++
++;;; Code:
++
++(require 'ert)
++(require 'cl-lib)
++(require 'gptel)
++(require 'gptel-request)
++
++
++;;;; 1. gptel--validate-tool-args
++;;
++;; NOTE (deviation from a naive expectation): this function does NOT signal
++;; an error.  It characterizes a return-string contract, not a signal: it
++;; returns nil when the args are valid, and an error *string* (meant to be
++;; fed back to the LLM) when required arguments are missing.  Hence no
++;; `should-error' anywhere below.
++
++(defun gptel-fork-test--tool (&rest args)
++  "Make a gptel-tool via the internal constructor (no global registration)."
++  (apply #'gptel--make-tool-internal args))
++
++(defconst gptel-fork-test--args
++  '((:name "location" :type string :description "d")
++    (:name "unit" :type string :description "d" :optional t)))
++
++(ert-deftest gptel-fork-validate-tool-args-happy ()
++  "All required arguments present -> nil (valid)."
++  (let ((tool (gptel-fork-test--tool
++               :name "test_tool" :description "d"
++               :function #'ignore :args gptel-fork-test--args)))
++    (should-not (gptel--validate-tool-args
++                 tool (list :location "Paris" :unit "C")))))
++
++(ert-deftest gptel-fork-validate-tool-args-missing ()
++  "Missing required argument -> error STRING naming tool and argument."
++  (let* ((tool (gptel-fork-test--tool
++                :name "test_tool" :description "d"
++                :function #'ignore :args gptel-fork-test--args))
++         (err (gptel--validate-tool-args tool (list :unit "C"))))
++    (should (stringp err))
++    (should (string-match-p (regexp-quote "test_tool") err))
++    (should (string-match-p (regexp-quote "location") err))))
++
++(ert-deftest gptel-fork-validate-tool-args-optional ()
++  "Omitting an :optional argument is fine -> nil."
++  (let ((tool (gptel-fork-test--tool
++               :name "test_tool" :description "d"
++               :function #'ignore :args gptel-fork-test--args)))
++    (should-not (gptel--validate-tool-args tool (list :location "Paris")))))
++
++(ert-deftest gptel-fork-validate-tool-args-explicit-nil ()
++  "Explicit nil value counts as present (`plist-member' semantics) -> nil."
++  (let ((tool (gptel-fork-test--tool
++               :name "test_tool" :description "d"
++               :function #'ignore :args gptel-fork-test--args)))
++    (should-not (gptel--validate-tool-args tool (list :location nil)))))
++
++
++;;;; 2. gptel--sanitize-string
++
++;; NB: "\200"-"\377" string literals are unibyte, so this converts them
++;; to multibyte raw-byte characters (#x3FFF00..#x3FFFFF), like the bytes
++;; a tool result read from a binary process/buffer would contain.
++(defconst gptel--raw-byte-sample (string-to-multibyte "\200\201\377"))
++
++(ert-deftest gptel--sanitize-string-raw-bytes ()
++  "Raw bytes are escaped so `json-serialize' accepts the result."
++  (let ((result (gptel--sanitize-string (string-to-multibyte "abc\200def"))))
++    (should (string-match-p "\\\\x80" result))
++    (should (stringp (json-serialize (list :r result))))))
++
++(ert-deftest gptel--sanitize-string-exact-escape-format ()
++  "Each byte becomes \\xNN, zero-padded hex, preserving order."
++  (should (equal (gptel--sanitize-string gptel--raw-byte-sample)
++                 "\\x80\\x81\\xFF")))
++
++(ert-deftest gptel--sanitize-string-all-raw-bytes ()
++  "A string consisting only of raw bytes is fully escaped."
++  (let ((result (gptel--sanitize-string (string-to-multibyte "\200\201\377"))))
++    (should (equal result "\\x80\\x81\\xFF"))
++    (should (stringp (json-serialize (list :r result))))))
++
++(ert-deftest gptel--sanitize-string-empty ()
++  "The empty string passes through unchanged and serializes."
++  (let ((empty ""))
++    (should (eq empty (gptel--sanitize-string empty)))
++    (should (stringp (json-serialize (list :r (gptel--sanitize-string empty)))))))
++
++(ert-deftest gptel--sanitize-string-clean-string ()
++  "A multibyte string without raw bytes passes through byte-identical."
++  (let ((clean "hello world"))
++    (should (eq clean (gptel--sanitize-string clean)))))
++
++(ert-deftest gptel--sanitize-string-clean-unibyte-ascii ()
++  "A unibyte ASCII string passes through as the same object."
++  (let ((clean (string-to-unibyte "hello world")))
++    (should (eq clean (gptel--sanitize-string clean)))))
++
++(ert-deftest gptel--sanitize-string-mixed-unicode-and-raw ()
++  "Unicode chars are preserved verbatim while raw bytes are escaped."
++  (let ((result (gptel--sanitize-string
++                 (concat "päivä" (string-to-multibyte "\200")))))
++    (should (equal result "päivä\\x80"))
++    (should-not (cl-loop for i below (length result)
++                         thereis (<= #x3FFF00 (aref result i) #x3FFFFF)))
++    (should (stringp (json-serialize (list :r result))))))
++
++(ert-deftest gptel--sanitize-string-unibyte ()
++  "Unibyte strings with bytes 0x80+ are escaped like multibyte raw bytes."
++  (let ((result (gptel--sanitize-string (string-to-unibyte "abc\200"))))
++    (should (equal result "abc\\x80"))
++    (should (stringp (json-serialize (list :r result))))))
++
++(ert-deftest gptel--sanitize-string-idempotent ()
++  "Sanitizing an already-sanitized string is a no-op (same object)."
++  (let ((once (gptel--sanitize-string gptel--raw-byte-sample)))
++    (should (eq once (gptel--sanitize-string once)))))
++
++(ert-deftest gptel--sanitize-string-tool-result-choke-point ()
++  "Sanitizing a printed tool result guarantees `json-serialize' succeeds."
++  ;; Shape produced by the Eval tool: (format \"Result:\\n%S\" ...) of a
++  ;; byte-code/primitive function object.
++  (let ((result (gptel--sanitize-string
++                 (format "Result:\n%S" (symbol-function 'ignore)))))
++    (should (stringp (json-serialize (list :r result)))))
++  ;; A tool result that IS a raw-byte string (as `gptel--to-string'
++  ;; passes strings through) must also serialize after sanitizing.
++  (should (stringp
++           (json-serialize
++            (list :r (gptel--sanitize-string
++                      (string-to-multibyte "\200\201")))))))
++
++(ert-deftest gptel--sanitize-string-documents-original-failure ()
++  "Raw bytes make `json-serialize' signal; the sanitized string does not."
++  (should-error (json-serialize (list :a (string-to-multibyte "\200"))))
++  (should-error (json-serialize (string-to-unibyte "abc\200")))
++  (should (stringp
++           (json-serialize
++            (list :a (gptel--sanitize-string (string-to-multibyte "\200")))))))
++
++(provide 'gptel-validate-and-sanitize-tool-args-test)
++;;; gptel-validate-and-sanitize-tool-args-test.el ends here
+-- 
+2.51.0

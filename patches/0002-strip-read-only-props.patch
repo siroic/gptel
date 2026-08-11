@@ -1,0 +1,121 @@
+From c50d75ab1541002c5c194a88ec76b91a9d5e7fc2 Mon Sep 17 00:00:00 2001
+From: Urho Laurinen <urho.laurinen@siroic.com>
+Date: Wed, 12 Aug 2026 12:00:00 +0300
+Subject: [PATCH 02/12] gptel: Strip read-only text properties when assembling prompts
+
+Prompt assembly copies text out of the user's buffer with
+`insert-buffer-substring', which preserves text properties -- including
+`read-only'.  Source buffers can legitimately carry read-only text: the
+most common case is org-transclusion, which marks transcluded regions
+read-only.
+
+The copied read-only text then makes later modifications of the prompt
+buffer signal "Text is read-only".  In `gptel-org--create-prompt' this
+happens inside the assembly loop itself, which inserts each successive
+region at `point-min', i.e. inside the read-only region just inserted.
+
+Bind `inhibit-read-only' for the copy/assembly step and remove the
+`read-only' properties afterwards, so no later transform, escape or
+header-stripping pass has to care.  Pure bugfix.
+
+Tests: tests/gptel-strip-read-only-props-test.el (standalone; extracted from the fork's characterization
+suite).
+---
+diff --git a/gptel-org.el b/gptel-org.el
+index 4dd0ac5..bd19387 100644
+--- a/gptel-org.el
++++ b/gptel-org.el
+@@ -279,10 +279,19 @@ depend on the value of `gptel-org-branching-context', which see."
+                    collect (point) into ends
+                    finally return (cons prompt-end ends))))
+             (gptel--with-buffer-copy org-buf nil nil
+-              (cl-loop for start in start-bounds
+-                       for end in end-bounds
+-                       do (insert-buffer-substring org-buf start end)
+-                       (goto-char (point-min)))
++              ;; Bind `inhibit-read-only' for the whole assembly: source text
++              ;; may carry `read-only' properties (e.g. org-transclusion
++              ;; regions) that would otherwise make later iterations of the
++              ;; loop (which insert at `point-min', i.e. inside the just-
++              ;; inserted read-only region) error with "Text is read-only".
++              ;; Properties are stripped after assembly so subsequent
++              ;; modifications don't need the binding.
++              (let ((inhibit-read-only t))
++                (cl-loop for start in start-bounds
++                         for end in end-bounds
++                         do (insert-buffer-substring org-buf start end)
++                         (goto-char (point-min)))
++                (remove-text-properties (point-min) (point-max) '(read-only nil)))
+               (goto-char (point-max))
+               (gptel-org--unescape-tool-results)
+               (gptel-org--strip-block-headers)
+diff --git a/gptel-request.el b/gptel-request.el
+index fc5115c..0b920b2 100644
+--- a/gptel-request.el
++++ b/gptel-request.el
+@@ -1126,7 +1126,13 @@ For BUF, START, END and BODY-THUNK see `gptel--with-buffer-copy'."
+                       gptel-stream gptel-include-reasoning gptel--request-params
+                       gptel-temperature gptel-max-tokens gptel-cache))
+         (set (make-local-variable sym) (buffer-local-value sym buf)))
+-      (when (and start end) (insert-buffer-substring buf start end))
++      (when (and start end)
++        (insert-buffer-substring buf start end)
++        ;; Strip `read-only' text properties copied from the source buffer
++        ;; (e.g. org-transclusion regions) so subsequent prompt-buffer
++        ;; modifications don't error with "Text is read-only".
++        (let ((inhibit-read-only t))
++          (remove-text-properties (point-min) (point-max) '(read-only nil))))
+       (setq major-mode (buffer-local-value 'major-mode buf))
+       (funcall body-thunk))))
+ 
+diff --git a/tests/gptel-strip-read-only-props-test.el b/tests/gptel-strip-read-only-props-test.el
+new file mode 100644
+index 0000000..282efd0
+--- /dev/null
++++ b/tests/gptel-strip-read-only-props-test.el
+@@ -0,0 +1,43 @@
++;;; gptel-strip-read-only-props-test.el --- Tests for read-only prop stripping -*- lexical-binding: t; -*-
++
++;;; Commentary:
++
++;; Pins the behaviour of `gptel--with-buffer-copy': the temporary prompt
++;; copy must have `read-only' text properties stripped, so that code running
++;; in the copy can freely edit it without signalling "Text is read-only".
++;;
++;; Batch-safe: no network access, no real LLM calls.
++
++;;; Code:
++
++(require 'ert)
++(require 'cl-lib)
++(require 'gptel)
++
++(ert-deftest gptel-fork-with-buffer-copy-strips-read-only ()
++  "The prompt copy has `read-only' properties stripped, so it stays editable."
++  (let ((src (generate-new-buffer " *gptel-fork-test-src*"))
++        (beg nil) (end nil))
++    (unwind-protect
++        (progn
++          (with-current-buffer src
++            (let ((inhibit-read-only t))
++              (insert "hello")
++              (put-text-property (point-min) (point-max) 'read-only t))
++            (setq beg (point-min) end (point-max)))
++          (let ((copy (gptel--with-buffer-copy src beg end
++                        (should-not (get-text-property (point-min) 'read-only))
++                        (goto-char (point-max))
++                        ;; Must not signal "Text is read-only":
++                        (insert " world")
++                        (should (equal (buffer-string) "hello world"))
++                        (current-buffer))))
++            (when (buffer-live-p copy)
++              (with-current-buffer copy (set-buffer-modified-p nil))
++              (kill-buffer copy))))
++      (when (buffer-live-p src)
++        (with-current-buffer src (set-buffer-modified-p nil))
++        (kill-buffer src)))))
++
++(provide 'gptel-strip-read-only-props-test)
++;;; gptel-strip-read-only-props-test.el ends here
+-- 
+2.51.0

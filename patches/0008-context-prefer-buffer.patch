@@ -1,0 +1,169 @@
+From b33ffbd569e8b46a4f7d3aa6c106e27fd9bc0cd0 Mon Sep 17 00:00:00 2001
+From: Urho Laurinen <urho.laurinen@siroic.com>
+Date: Wed, 12 Aug 2026 12:00:00 +0300
+Subject: [PATCH 08/12] gptel-context: Prefer live buffer contents for file context
+
+When a file in `gptel-context' is being visited by a buffer with
+unsaved changes, gptel sends the on-disk contents.  That silently
+contradicts the usual expectation while editing -- you add the file you
+are working on to the context, ask about the code in front of you, and
+the model answers about a stale version.
+
+Prefer a live visiting buffer for file context, including a modified
+one, controlled by a new `gptel-context-prefer-buffer' (default t); set
+it to nil for the previous disk-only behaviour.  The whole-file path now
+also goes through `gptel-context--insert-buffer-string' when a buffer is
+used, so whole-file and region context behave consistently.
+
+Tests: tests/gptel-context-prefer-buffer-test.el (standalone; extracted from the fork's characterization
+suite).
+---
+diff --git a/gptel-context.el b/gptel-context.el
+index a940ca9..438949e 100644
+--- a/gptel-context.el
++++ b/gptel-context.el
+@@ -102,6 +102,24 @@ context."
+   :group 'gptel
+   :type 'boolean)
+ 
++(defcustom gptel-context-prefer-buffer t
++  "Whether file context should prefer a live visiting buffer over disk.
++
++When non-nil (the default), if a file added to the gptel context is
++being visited by a buffer, that buffer's contents are sent — including
++any unsaved modifications.  This matches the usual expectation that
++the buffer is the source of truth while you are editing.
++
++When nil, file context is always read from disk, ignoring any
++visiting buffer's modifications.  This was the historical behaviour
++prior to this option being introduced.
++
++Affects only file context (as added via `gptel-context-add-file').
++Buffer context (added directly via `gptel-context-add') always reads
++the live buffer regardless of this setting."
++  :group 'gptel
++  :type 'boolean)
++
+ (defvar gptel-context--project-files nil
+   "Cached alist of project files per project.")
+ 
+@@ -271,7 +289,11 @@ ACTION should be either `add' or `remove'."
+   "Add the file at PATH to the gptel context.
+ 
+ If PATH is a directory, recursively add all files in it.  PATH should be
+-readable as text."
++readable as text.
++
++When a buffer is visiting PATH at request time, its live contents
++(including any unsaved modifications) are sent in place of the on-disk
++file.  See `gptel-context-prefer-buffer' to disable this behaviour."
+   (interactive "fChoose file to add to context: ")
+   (cond ((file-directory-p path)
+          (gptel-context--add-directory path 'add))
+@@ -591,22 +613,35 @@ HEADER is an optional header to insert before the contents."
+   "Insert at point the contents of file at PATH as context.
+ 
+ SPEC is a plist specifying :lines or position :bounds to include instead
+-of the entire file.  See `gptel-context' for details."
+-  (if (not (and spec (or (plist-member spec :lines)
+-                         (plist-member spec :bounds))))
+-      ;; Insert whole file
+-      (gptel--insert-file-string path)
+-    ;; Insert only regions from lines and/or bounds
+-    (let* ((visiting-buf (find-buffer-visiting ;Reuse buffer
+-                          path (lambda (b) (not (buffer-modified-p b)))))
+-           (file-buf (or visiting-buf   ;temp buf to dump file contents
+-                         (gptel--temp-buffer " *gptel-file-context*"))))
+-      (unless visiting-buf
+-        (with-current-buffer file-buf (insert-file-contents path)))
+-      (gptel-context--insert-buffer-string
+-       file-buf spec (format "In file `%s`:\n\n```\n"
+-                             (abbreviate-file-name path)))
+-      (unless visiting-buf (kill-buffer file-buf)))))
++of the entire file.  See `gptel-context' for details.
++
++When `gptel-context-prefer-buffer' is non-nil, a live buffer visiting
++PATH (including one with unsaved modifications) is preferred over the
++on-disk contents."
++  (let* ((header (format "In file `%s`:\n\n```\n"
++                         (abbreviate-file-name path)))
++         ;; Pick a visiting buffer per `gptel-context-prefer-buffer':
++         ;; when non-nil, accept any visiting buffer (modified or not);
++         ;; when nil, only reuse an unmodified visiting buffer (legacy
++         ;; behaviour) so modifications stay invisible to the model.
++         (visiting-buf (if gptel-context-prefer-buffer
++                           (find-buffer-visiting path)
++                         (find-buffer-visiting
++                          path (lambda (b) (not (buffer-modified-p b)))))))
++    (if (not (and spec (or (plist-member spec :lines)
++                           (plist-member spec :bounds))))
++        ;; Insert whole file
++        (if visiting-buf
++            (gptel-context--insert-buffer-string visiting-buf nil header)
++          (gptel--insert-file-string path))
++      ;; Insert only regions from lines and/or bounds
++      (let ((file-buf (or visiting-buf ;Reuse buffer when available
++                          ;; temp buf to dump file contents
++                          (gptel--temp-buffer " *gptel-file-context*"))))
++        (unless visiting-buf
++          (with-current-buffer file-buf (insert-file-contents path)))
++        (gptel-context--insert-buffer-string file-buf spec header)
++        (unless visiting-buf (kill-buffer file-buf))))))
+ 
+ (defun gptel-context--string (context-alist)
+   "Format the aggregated gptel context as annotated markdown fragments.
+diff --git a/tests/gptel-context-prefer-buffer-test.el b/tests/gptel-context-prefer-buffer-test.el
+new file mode 100644
+index 0000000..aeb3fbd
+--- /dev/null
++++ b/tests/gptel-context-prefer-buffer-test.el
+@@ -0,0 +1,47 @@
++;;; gptel-context-prefer-buffer-test.el --- Tests for gptel-context-prefer-buffer -*- lexical-binding: t; -*-
++
++;;; Commentary:
++
++;; ERT test for `gptel-context-prefer-buffer': when non-nil, unsaved
++;; buffer contents are used instead of the on-disk file contents when
++;; inserting file context.
++;;
++;; Batch-safe: no network access, no real LLM calls.
++
++;;; Code:
++
++(require 'ert)
++(require 'gptel)
++(require 'gptel-context)
++
++(ert-deftest gptel-fork-context-prefer-buffer ()
++  "When non-nil, unsaved buffer contents win over on-disk contents."
++  (let* ((kill-buffer-query-functions nil)
++         (file (make-temp-file "gptel-fork-test-" nil ".txt" "disk contents\n"))
++         (buf nil))
++    (unwind-protect
++        (progn
++          (setq buf (find-file-noselect file))
++          (with-current-buffer buf
++            (goto-char (point-max))
++            (insert "buffer only line\n")
++            (should (buffer-modified-p)))
++          (let ((gptel-context-prefer-buffer t))
++            (should (string-match-p
++                     (regexp-quote "buffer only line")
++                     (with-temp-buffer
++                       (gptel-context--insert-file-string file)
++                       (buffer-string)))))
++          (let* ((gptel-context-prefer-buffer nil)
++                 (str (with-temp-buffer
++                        (gptel-context--insert-file-string file)
++                        (buffer-string))))
++            (should (string-match-p (regexp-quote "disk contents") str))
++            (should-not (string-match-p (regexp-quote "buffer only line") str))))
++      (when (buffer-live-p buf)
++        (with-current-buffer buf (set-buffer-modified-p nil))
++        (kill-buffer buf))
++      (ignore-errors (delete-file file)))))
++
++(provide 'gptel-context-prefer-buffer-test)
++;;; gptel-context-prefer-buffer-test.el ends here
+-- 
+2.51.0

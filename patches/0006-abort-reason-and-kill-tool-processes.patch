@@ -1,0 +1,247 @@
+From 3efd200f60da4f8e82a338dca4072b1722dd8c7e Mon Sep 17 00:00:00 2001
+From: Urho Laurinen <urho.laurinen@siroic.com>
+Date: Wed, 12 Aug 2026 12:00:00 +0300
+Subject: [PATCH 06/12] gptel: Record abort reason and kill tool subprocesses on abort
+
+Aborting a request that has async tools in flight leaves their
+subprocesses running: they keep consuming CPU, keep their process
+buffers alive, and their sentinels later call back into a dead request,
+writing results into an aborted FSM (and potentially transitioning it
+onwards).
+
+Track processes returned by async tool functions in the request info's
+:tool-processes, kill the live ones from `gptel-abort' via a new
+`gptel--kill-tool-processes', and prune exited ones as each tool result
+arrives.  Make `gptel--handle-tool-result' a no-op for a request in a
+terminal state or already marked as aborting -- the state alone is not
+enough, since `gptel-abort' runs the callback (from which a sentinel may
+fire) before transitioning to ABRT.
+
+Also give `gptel-abort' optional REASON (`user', the default, or
+`system') and CAUSE arguments, recorded as :abort-reason / :abort-cause.
+This lets callers distinguish user aborts from machinery-initiated ones
+in `gptel-post-response-functions' and callbacks, and is what the
+terminal-state check above keys off.
+
+Tests: tests/gptel-abort-reason-and-kill-tool-processes-test.el (standalone; extracted from the fork's characterization
+suite).
+---
+diff --git a/gptel-request.el b/gptel-request.el
+index fc5115c..89aaeef 100644
+--- a/gptel-request.el
++++ b/gptel-request.el
+@@ -1919,24 +1919,40 @@ TOOL-CALL is a plist with the tool :name, :args and other metadata.
+ TOOL-SPEC is the `gptel-tool' object, and FSM is the request state.
+ 
+ If all pending tool calls in the current request have finished, it
+-injects the results into the prompt data and transitions the FSM."
+-  (let* ((info (gptel-fsm-info fsm))
+-         (tool-result-alist (plist-get info :tool-result))
+-         ;; MAYBE(tool-hooks): Use plist-member for valid nil :result?
+-         (remaining (cl-loop for call in (plist-get info :tool-use)
+-                             count (not (plist-get call :result)))))
+-    (let ((result (gptel--to-string result)))
+-      ;; FIXME(tool-hooks): If a hook has changed the tool that was called
+-      ;; tool-spec needs to be updated.
+-      (push (list tool-spec (plist-get tool-call :args) result)
+-            tool-result-alist)
+-      (plist-put info :tool-result tool-result-alist) ;for the callback
+-      ;; NOTE: tool-call is a member of (plist-get info :tool-use), so :tool-use
+-      ;; is modified by side effect.
+-      ;; FIXME: Make the implicit addition to :tool-use explicit
+-      (plist-put tool-call :result result)) ;for the LLM
+-    ;; All tools have run
+-    (when (<= (cl-decf remaining) 0) (gptel--fsm-transition fsm))))
++injects the results into the prompt data and transitions the FSM.
++
++Do nothing if FSM is already in a terminal state: a tool's process
++sentinel can fire after the request was aborted, and its result must not
++be written into the dead request.  Info's :abort-reason counts as
++terminal too: both abort paths record it before running the callback and
++killing tool processes, but transition FSM to ABRT only afterwards, so
++checking the state alone leaves a window in which a sentinel firing from
++inside the callback could revive the request."
++  (unless (or (memq (gptel-fsm-state fsm) '(ABRT DONE ERRS))
++              (plist-get (gptel-fsm-info fsm) :abort-reason))
++    (let* ((info (gptel-fsm-info fsm))
++           (tool-result-alist (plist-get info :tool-result))
++           ;; MAYBE(tool-hooks): Use plist-member for valid nil :result?
++           (remaining (cl-loop for call in (plist-get info :tool-use)
++                               count (not (plist-get call :result)))))
++      (let ((result (gptel--to-string result)))
++        ;; FIXME(tool-hooks): If a hook has changed the tool that was called
++        ;; tool-spec needs to be updated.
++        (push (list tool-spec (plist-get tool-call :args) result)
++              tool-result-alist)
++        (plist-put info :tool-result tool-result-alist) ;for the callback
++        ;; NOTE: tool-call is a member of (plist-get info :tool-use), so :tool-use
++        ;; is modified by side effect.
++        ;; FIXME: Make the implicit addition to :tool-use explicit
++        (plist-put tool-call :result result)) ;for the LLM
++      ;; This tool's process (if any) has exited: drop dead processes so
++      ;; :tool-processes only ever holds in-flight ones.
++      (when (plist-get info :tool-processes)
++        (plist-put info :tool-processes
++                   (cl-delete-if-not #'process-live-p
++                                     (plist-get info :tool-processes))))
++      ;; All tools have run
++      (when (<= (cl-decf remaining) 0) (gptel--fsm-transition fsm)))))
+ 
+ (defun gptel--handle-tool-use (fsm)
+   "Run tool calls captured in FSM, and advance the state machine with the results."
+@@ -1985,8 +2001,16 @@ injects the results into the prompt data and transitions the FSM."
+                      (push (list tool-spec args process-tool-result) pending-calls)
+                    (let ((arg-values (gptel--map-tool-args tool-spec args)))
+                      (if (gptel-tool-async tool-spec) ;If not, run the tool
+-                         (apply (gptel-tool-function tool-spec)
+-                                process-tool-result arg-values)
++                         ;; Async tools that run external commands return
++                         ;; their process; track it so `gptel-abort' can
++                         ;; kill it instead of orphaning it.
++                         (let ((tool-proc
++                                (apply (gptel-tool-function tool-spec)
++                                       process-tool-result arg-values)))
++                           (when (processp tool-proc)
++                             (plist-put info :tool-processes
++                                        (cons tool-proc
++                                              (plist-get info :tool-processes)))))
+                        (let ((result (condition-case errdata
+                                          (apply (gptel-tool-function tool-spec) arg-values)
+                                        (error (mapconcat #'gptel--to-string errdata " ")))))
+@@ -2376,10 +2400,30 @@ Initiate the request when done."
+     (unless (plist-get info :dry-run) (gptel--fsm-transition fsm))
+     fsm))
+ 
+-(defun gptel-abort (buf)
++(defun gptel--kill-tool-processes (info)
++  "Kill any live tool subprocesses recorded in INFO.
++Tool functions that return a process object (async tools running
++external commands) are tracked in INFO's :tool-processes.  Kill
++each live one, along with its process buffer, and clear the list."
++  (dolist (proc (plist-get info :tool-processes))
++    (when (and (processp proc) (process-live-p proc))
++      (set-process-sentinel proc #'ignore)
++      (when-let* ((buf (process-buffer proc))
++                  ((buffer-live-p buf)))
++        (kill-buffer buf))
++      (delete-process proc)))
++  (plist-put info :tool-processes nil))
++
++(defun gptel-abort (buf &optional reason cause)
+   "Stop any active gptel process associated with buffer BUF.
+ 
+-BUF defaults to the current buffer."
++BUF defaults to the current buffer.
++
++REASON indicates why the request is being aborted: `user' (the
++default when nil) for interactive/user-initiated aborts, or
++`system' for automated aborts triggered by machinery rather than
++the user.  CAUSE is an optional explanatory string describing the
++abort; it is recorded on the request info as :abort-cause."
+   (interactive (list (current-buffer)))
+   (when-let* ((proc-attrs
+                (cl-find-if
+@@ -2394,11 +2438,14 @@ BUF defaults to the current buffer."
+               (fsm (cadr proc-attrs))
+               (info (gptel-fsm-info fsm))
+               (abort-fn (cddr proc-attrs)))
++    (plist-put info :abort-reason (or reason 'user))
++    (when cause (plist-put info :abort-cause cause))
+     ;; Run :callback with abort signal
+     (with-demoted-errors "Callback error: %S"
+       (and-let* ((cb (plist-get info :callback))
+                  ((functionp cb)))
+         (funcall cb 'abort info)))
++    (gptel--kill-tool-processes info)
+     (funcall abort-fn)
+     (setf (alist-get proc gptel--request-alist nil 'remove) nil)
+     (gptel--fsm-transition fsm 'ABRT)
+diff --git a/tests/gptel-abort-reason-and-kill-tool-processes-test.el b/tests/gptel-abort-reason-and-kill-tool-processes-test.el
+new file mode 100644
+index 0000000..7c1b09f
+--- /dev/null
++++ b/tests/gptel-abort-reason-and-kill-tool-processes-test.el
+@@ -0,0 +1,81 @@
++;;; gptel-abort-reason-and-kill-tool-processes-test.el --- Tests for abort reason/cause and tool process cleanup -*- lexical-binding: t; -*-
++
++;;; Commentary:
++
++;; Pins two related behaviours around aborting a gptel request:
++;;
++;; 1. `gptel--kill-tool-processes' kills live tool processes, kills their
++;;    buffers, and clears the :tool-processes slot of the info plist.
++;; 2. `gptel-abort' records :abort-reason and :abort-cause in the request's
++;;    info plist, calls the registered abort function, and moves the FSM to
++;;    the ABRT state; without an explicit reason it defaults to `user' and
++;;    sets no :abort-cause.
++;;
++;; Batch-safe: no network access, no real LLM calls.
++
++;;; Code:
++
++(require 'ert)
++(require 'cl-lib)
++(require 'gptel)
++
++
++;;;; gptel--kill-tool-processes
++
++(ert-deftest gptel-fork-kill-tool-processes ()
++  "Live tool processes are killed, their buffers killed, slot cleared."
++  (skip-unless (executable-find "sleep"))
++  (let* ((kill-buffer-query-functions nil) ; batch safety: no "running process?" prompt
++         (buf (generate-new-buffer " *gptel-fork-test-proc*"))
++         (proc (start-process "gptel-fork-test-sleep" buf "sleep" "100"))
++         (info (list :tool-processes (list proc))))
++    (unwind-protect
++        (progn
++          (should (process-live-p proc))
++          (gptel--kill-tool-processes info)
++          (accept-process-output proc 0.1)
++          (sleep-for 0.1)
++          (should-not (process-live-p proc))
++          (should-not (buffer-live-p buf))
++          (should-not (plist-get info :tool-processes)))
++      (when (process-live-p proc)
++        (set-process-sentinel proc #'ignore)
++        (delete-process proc))
++      (when (buffer-live-p buf) (kill-buffer buf)))))
++
++
++;;;; gptel-abort
++
++(ert-deftest gptel-fork-abort-records-reason-and-cause ()
++  "`gptel-abort' records :abort-reason/:abort-cause, calls abort-fn, -> ABRT."
++  (let* ((buf (generate-new-buffer " *gptel-fork-test-abort*"))
++         (called nil)
++         (info (list :buffer buf))
++         (fsm (gptel-make-fsm :state 'TYPE :table nil :handlers nil :info info))
++         (gptel--request-alist
++          (list (cons 'fake-proc (cons fsm (lambda () (setq called t)))))))
++    (unwind-protect
++        (progn
++          (gptel-abort buf 'system "test cause")
++          (should (eq (plist-get info :abort-reason) 'system))
++          (should (equal (plist-get info :abort-cause) "test cause"))
++          (should called)
++          (should (eq (gptel-fsm-state fsm) 'ABRT)))
++      (when (buffer-live-p buf) (kill-buffer buf)))))
++
++(ert-deftest gptel-fork-abort-defaults-to-user ()
++  "Without REASON, the abort reason defaults to `user'; no :abort-cause."
++  (let* ((buf (generate-new-buffer " *gptel-fork-test-abort2*"))
++         (info (list :buffer buf))
++         (fsm (gptel-make-fsm :state 'TYPE :table nil :handlers nil :info info))
++         (gptel--request-alist
++          (list (cons 'fake-proc (cons fsm #'ignore)))))
++    (unwind-protect
++        (progn
++          (gptel-abort buf)
++          (should (eq (plist-get info :abort-reason) 'user))
++          (should-not (plist-member info :abort-cause)))
++      (when (buffer-live-p buf) (kill-buffer buf)))))
++
++(provide 'gptel-abort-reason-and-kill-tool-processes-test)
++;;; gptel-abort-reason-and-kill-tool-processes-test.el ends here
+-- 
+2.51.0

@@ -1,0 +1,168 @@
+From 18177f46e95dbb59cf65a42242c004a15032383a Mon Sep 17 00:00:00 2001
+From: Urho Laurinen <urho.laurinen@siroic.com>
+Date: Wed, 12 Aug 2026 12:00:00 +0300
+Subject: [PATCH 04/12] gptel: Expose the in-flight request via gptel-current-info
+
+Mid-turn hooks (`gptel-pre-response-hook', `gptel-post-stream-hook',
+the tool-call hooks, the reasoning hooks) receive no arguments, so a hook
+function has no way to reach the request it belongs to: its backend,
+model, tools, :tool-use list or any state the caller stashed in the info
+plist.  Hook authors currently resort to advising internals.
+
+Add a `gptel--current-fsm' dynamic variable bound around FSM handler
+dispatch and around the three asynchronous response entry points (the
+`url-retrieve' completion callback, the curl sentinel and the curl
+stream sentinel), plus a small public accessor `gptel-current-info'.
+No behaviour change for existing code.
+
+Tests: tests/gptel-current-fsm-test.el (standalone; extracted from the fork's characterization
+suite).
+---
+diff --git a/gptel-request.el b/gptel-request.el
+index fc5115c..4bbcff1 100644
+--- a/gptel-request.el
++++ b/gptel-request.el
+@@ -1796,6 +1796,7 @@ BACKEND is the `gptel-backend'."
+ 
+ 
+ ;;; State machine for driving requests
++(defvar gptel--current-fsm)             ;Defined in gptel.el
+ (defvar gptel-request--transitions
+   `((INIT . ((t                       . WAIT)))
+     (WAIT . ((t                       . TYPE)))
+@@ -1878,7 +1879,8 @@ automatically from MACHINE's transition table."
+         (plist-get (gptel-fsm-info machine) :history))
+   (setf (gptel-fsm-state machine) new-state)
+   (when-let* ((handlers (alist-get new-state (gptel-fsm-handlers machine))))
+-    (mapc (lambda (h) (funcall h machine)) handlers)))
++    (let ((gptel--current-fsm machine))
++      (mapc (lambda (h) (funcall h machine)) handlers))))
+ 
+ (defun gptel--fsm-next (machine)
+   "Determine MACHINE's next state according to its transition table.
+@@ -2706,6 +2708,7 @@ the response is inserted into the current buffer after point."
+                              (plist-put info :status http-msg)
+                              (gptel--fsm-transition fsm) ;WAIT -> TYPE
+                              (when error (plist-put info :error error))
++                             (let ((gptel--current-fsm fsm))
+                              (when response ;Look for a reasoning block
+                                (if (string-match-p "^\\s-*<think>" response)
+                                    (when-let* ((idx (string-search "</think>" response)))
+@@ -2721,7 +2724,7 @@ the response is inserted into the current buffer after point."
+                                    (funcall callback (cons 'reasoning reasoning) info))))
+                              (when (or response (not (member http-status '("200" "100"))))
+                                (with-demoted-errors "gptel callback error: %S"
+-                                 (funcall callback response info)))
++                                 (funcall callback response info))))
+                              (gptel--fsm-transition fsm) ;TYPE -> next
+                              (setf (alist-get buf gptel--request-alist nil 'remove) nil)
+                              (kill-buffer buf)))
+@@ -2986,7 +2989,8 @@ PROCESS and _STATUS are process parameters."
+            (info (gptel-fsm-info fsm))
+            (http-status (plist-get info :http-status)))
+       (when gptel-log-level (gptel-curl--log-response proc-buf info)) ;logging
+-      (cond
++      (let ((gptel--current-fsm fsm))
++       (cond
+        ;; Curl exited with a non-zero status: connection-level failure
+        ((not (zerop exit-status))
+         ;; MAYBE: This transition should happen in the process filter, but it's
+@@ -3021,7 +3025,7 @@ PROCESS and _STATUS are process parameters."
+                 (plist-put info :error "Malformed JSON in response."))
+                (t (plist-put info :error "Could not parse HTTP response."))))))
+         (with-demoted-errors "gptel callback error: %S"
+-          (funcall (plist-get info :callback) nil info))))
++          (funcall (plist-get info :callback) nil info)))))
+       (gptel--fsm-transition fsm))      ; Move to next state
+     (setf (alist-get process gptel--request-alist nil 'remove) nil)
+     (kill-buffer proc-buf)))
+@@ -3060,7 +3064,8 @@ PROCESS and _STATUS are process parameters."
+         (when (member http-status '("200" "100"))
+           (let ((response (gptel-curl--parse-stream
+                            (plist-get proc-info :backend) proc-info))
+-                (reasoning-block (plist-get proc-info :reasoning-block)))
++                (reasoning-block (plist-get proc-info :reasoning-block))
++                (gptel--current-fsm fsm))
+             ;; Depending on the API, there are two modes that reasoning or
+             ;; chain-of-thought content appears: as part of the main response
+             ;; but surrounded by <think>...</think> tags, or as a separate
+diff --git a/gptel.el b/gptel.el
+index 16110c4..05354fd 100644
+--- a/gptel.el
++++ b/gptel.el
+@@ -400,6 +400,24 @@ transient menu interface provided by `gptel-menu'."
+   :type 'file
+   :group 'gptel)
+ 
++(defvar gptel--current-fsm nil
++  "The gptel FSM (`gptel-fsm') of the request currently being processed.
++
++Dynamically bound around FSM state-handler dispatch and around the
++asynchronous response-insertion callbacks (the curl process filter,
++the curl sentinel, and the `url-retrieve' completion callback), so
++that mid-turn hooks (`gptel-pre-response-hook',
++`gptel-post-stream-hook', the tool-call and reasoning hooks) can
++reach the request's context via `gptel-current-info'.
++
++Nil when no request is being processed.")
++
++(defun gptel-current-info ()
++  "Return the info plist of the request currently being processed.
++This is the `info' of `gptel--current-fsm', or nil if no request is
++in flight.  Intended for use inside mid-turn gptel hooks."
++  (and gptel--current-fsm (gptel-fsm-info gptel--current-fsm)))
++
+ (defvar gptel-refresh-buffer-hook '(jit-lock-refontify)
+   "Hook run in gptel buffers after changing gptel's configuration.
+ 
+diff --git a/tests/gptel-current-fsm-test.el b/tests/gptel-current-fsm-test.el
+new file mode 100644
+index 0000000..47e8412
+--- /dev/null
++++ b/tests/gptel-current-fsm-test.el
+@@ -0,0 +1,43 @@
++;;; gptel-current-fsm-test.el --- Tests for gptel--current-fsm binding -*- lexical-binding: t; -*-
++
++;;; Commentary:
++
++;; Pins the behaviour of `gptel--current-fsm' and `gptel-current-info':
++;; they are bound while a state-machine handler runs (giving handlers
++;; access to the running FSM and its info plist) and are nil outside of
++;; handler dispatch.
++;;
++;; Batch-safe: no network access, no real LLM calls.
++
++;;; Code:
++
++(require 'ert)
++(require 'gptel)
++
++(ert-deftest gptel-fork-current-fsm-bound-during-handler-dispatch ()
++  "`gptel--current-fsm' is bound while state handlers run, nil outside."
++  (should-not gptel--current-fsm)
++  (should-not (gptel-current-info))
++  (let* ((ran nil) (seen-fsm 'unset) (seen-info 'unset)
++         (info (list :marker 'known))
++         (fsm (gptel-make-fsm
++               :state 'INIT :table nil :info info
++               :handlers (list (list 'TEST
++                                     (lambda (_m)
++                                       (setq ran t
++                                             seen-fsm gptel--current-fsm
++                                             seen-info (gptel-current-info))))))))
++    (gptel--fsm-transition fsm 'TEST)
++    (should ran)
++    (should (eq seen-fsm fsm))
++    ;; NOTE: the transition pushes onto the info plist's :history, which
++    ;; replaces the head cons of the plist; so the handler's info is `eq'
++    ;; to the fsm's *current* info, not necessarily to the original object.
++    (should (eq seen-info (gptel-fsm-info fsm)))
++    (should (eq (plist-get seen-info :marker) 'known))
++    (should (equal (plist-get seen-info :history) '(INIT)))
++    (should (eq (gptel-fsm-state fsm) 'TEST)))
++  (should-not gptel--current-fsm))
++
++(provide 'gptel-current-fsm-test)
++;;; gptel-current-fsm-test.el ends here
+-- 
+2.51.0

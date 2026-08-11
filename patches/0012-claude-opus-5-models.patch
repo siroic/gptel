@@ -1,0 +1,64 @@
+From 9e0decd840ffe3151106fbcd06bd3257e79c2846 Mon Sep 17 00:00:00 2001
+From: Urho Laurinen <urho.laurinen@siroic.com>
+Date: Wed, 12 Aug 2026 12:00:00 +0300
+Subject: [PATCH 12/12] anthropic, bedrock: Add claude-opus-5
+
+Add the `claude-opus-5' model entry to the Anthropic backend and its
+Bedrock model-id mapping, and mention it in NEWS alongside the other
+recently added Anthropic and Bedrock models.  Data only, no logic
+change.
+
+No test: model/backend data addition, nothing executable to assert.
+---
+diff --git a/NEWS b/NEWS
+index 22d6757..b533c3a 100644
+--- a/NEWS
++++ b/NEWS
+@@ -58,11 +58,11 @@
+ 
+ ** New models and backends
+ 
+-- Bedrock backend: Add support for =claude-opus-4-7= and
+-  =claude-opus-4-8=.
++- Bedrock backend: Add support for =claude-opus-4-7=,
++  =claude-opus-4-8= and =claude-opus-5=.
+ 
+ - Anthropic backend: Add support for =claude-sonnet-5=,
+-  =claude-opus-4-8= and =claude-fable-5=.
++  =claude-opus-4-8=, =claude-fable-5= and =claude-opus-5=.
+ 
+ - GitHub Copilot backend: Add support for =gemini-3.6-flash=,
+   =gemini-3.5-flash=, =gpt-5.6-sol=, =gpt-5.6-terra=, =gpt-5.6-luna=,
+diff --git a/gptel-anthropic.el b/gptel-anthropic.el
+index 02abebd..5eb34c8 100644
+--- a/gptel-anthropic.el
++++ b/gptel-anthropic.el
+@@ -612,6 +612,14 @@ Media files, if present, are placed in `gptel-context'."
+      :input-cost 10
+      :output-cost 50
+      :cutoff-date "2026-01")
++    (claude-opus-5
++     :description "Anthropic's most capable model for complex reasoning and advanced coding"
++     :capabilities (media tool-use cache)
++     :mime-types ("image/jpeg" "image/png" "image/gif" "image/webp" "application/pdf")
++     :context-window 1000
++     :input-cost 5
++     :output-cost 25
++     :cutoff-date "2026-01")
+     (claude-opus-4-8
+      :description "Most capable model for complex reasoning and advanced coding"
+      :capabilities (media tool-use cache)
+diff --git a/gptel-bedrock.el b/gptel-bedrock.el
+index 8326105..be0b041 100644
+--- a/gptel-bedrock.el
++++ b/gptel-bedrock.el
+@@ -644,6 +644,7 @@ Convenient to use with `cl-multiple-value-bind'"
+     (claude-opus-4-6             . "anthropic.claude-opus-4-6-v1")
+     (claude-opus-4-7             . "anthropic.claude-opus-4-7")
+     (claude-opus-4-8             . "anthropic.claude-opus-4-8")
++    (claude-opus-5               . "anthropic.claude-opus-5")
+     (claude-sonnet-4-5-20250929  . "anthropic.claude-sonnet-4-5-20250929-v1:0")
+     (claude-haiku-4-5-20251001   . "anthropic.claude-haiku-4-5-20251001-v1:0")
+ 	(claude-opus-4-5-20251101    . "anthropic.claude-opus-4-5-20251101-v1:0")
+-- 
+2.51.0

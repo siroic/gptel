@@ -2212,7 +2212,7 @@ seams, then retire.
   (=gptel-request.el:1884=) match siro-orga's usage.
 - No drift found; no siro-orga fixes required.
 **** Phase 4 — Upstream the seams
-***** AI-DO Split the seam patches into independent, upstreamable units
+***** AI-DONE Split the seam patches into independent, upstreamable units
 - One unit per seam, each self-contained with tests and a rationale:
   (1) =gptel-pre-reasoning-hook= / =gptel-post-reasoning-hook=;
   (2) =gptel--current-fsm= + =gptel-current-info=;
@@ -2224,6 +2224,17 @@ seams, then retire.
   (8) read-only text-property stripping.
 - Order by independence: (7) and (8) are pure bugfixes and should go
   first; (1)–(3) are the ones siro-orga actually blocks on.
+- Done: 12 patch units in =patches/= (=0001-anthropic-empty-reasoning-guard=
+  … =0012-claude-opus-5-models=), each a =git am=-able format-patch file
+  written against vanilla =origin/master= and verified =git apply
+  --check=-clean there; units 1–8 embed their own standalone ERT test
+  file (28 tests total, each unit's tests green with only that unit
+  applied to vanilla), units 9–12 state why they carry no test.
+  =patches/README.org= documents per-unit rationale, files touched, the
+  known mutual conflicts (5↔10 on the pre-tool hook form, 6↔7 and
+  5↔6↔7 in the tool-use/tool-result paths), and the two unassigned
+  =gptel-rewrite.el= / =gptel-transient.el= FSM =:table= hunks left for
+  a future unit 0013.
 ***** AI-DO Submit upstream and track acceptance
 - Depends on Q2.  Record per-unit status (submitted / merged /
   rejected) in =Outcomes= so the retirement gate is auditable.
@@ -2280,6 +2291,11 @@ seams, then retire.
   found zero drift (org-output→properties migration already done
   siro-side).  Live interactive smoke test still pending in a dev
   session.
+- Phase 4 split complete (2026-08-12, by urho's session): 12
+  independent upstreamable units in =patches/=, all =git apply
+  --check=-clean against =origin/master=, per-unit tests embedded (28
+  tests, green per-unit on vanilla), =patches/README.org= with
+  rationale and conflict notes.
 - Next: Phase 4 seam-unit PR preparation (opportunistic per D5,
   tracked in siro-orga.org) and Phase 5 retirement gate after the
   live smoke test passes.
