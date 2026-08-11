@@ -1915,6 +1915,15 @@ tracked; late sentinel after abort does not corrupt FSM state.
   thin, shrinking =siro-gptel-compat.el= shim in =~/siro-orga= that
   provides only seams not yet accepted upstream.  The fork is retired
   when the shim is empty or purely additive.
+- Decision D4 (user, Q1): Phase 3 uses MERGE (=git merge origin/master=
+  into the fork branch), not rebase.
+- Decision D5 (user, Q2): end-state is a minimal PERMANENT fork of
+  seam-only patches (option b).  Upstream PRs may still be submitted
+  opportunistically; each seam is tracked as a PR unit in
+  [[file:../siro-orga/siro-orga.org::*Submit gptel seam patches upstream (karthink/gptel)][Submit gptel seam patches upstream (karthink/gptel)]].
+- Decision D6 (user, Q3): the =org-output= slot becomes a generic
+  properties mechanism kept in the permanent fork; propose upstream
+  later as a generic =:properties= plist slot on =gptel-tool=.
 *** Open questions for the user
 - Q1: Rebase or merge for Phase 3?  Options:
   (a) =git rebase --onto origin/master <merge-base> orga= — linear
@@ -1941,6 +1950,11 @@ tracked; late sentinel after abort does not corrupt FSM state.
 2. b
 3. generic properties in the permanent fork
 Make a todo into [[file:../siro-orga/siro-orga.org::*TODOs future plans][TODOs future plans]] with a sub todo for each patch so in the future we can submit PR upstream 
+**** AI-FEEDBACK Decisions D4-D6 recorded; PR-tracking TODO created in siro-orga.org
+- Q1 → merge (D4), Q2 → permanent minimal fork with opportunistic PRs
+  (D5), Q3 → generic properties slot (D6); recorded under =Decisions=.
+- Per-seam PR tracking TODO created in siro-orga.org under =TODOs
+  future plans=: one sub-TODO per patch unit (9 units), see link in D5.
 *** Mission
 Bring the =orga= fork up to date with upstream =karthink/gptel=, and
 reduce the fork to a set of generic, upstreamable seams so that
@@ -1950,7 +1964,7 @@ Siroic-specific fork debt, then absorb upstream, then upstream the
 seams, then retire.
 *** TODOs
 **** Phase 0 — Regression net (do this first, no behaviour change)
-***** AI-DO Establish a green test baseline on =orga=
+***** AI-DONE Establish a green test baseline on =orga=
 - Run the existing suite (=tests/gptel-request-test.el=, plus the
   =test/= harness if present) and record the exact pass/fail baseline in
   this TODO's =Outcomes= section.
@@ -1971,7 +1985,7 @@ seams, then retire.
 - Include error-path tests, not only happy paths.
 - These tests are the acceptance criteria for Phases 2 and 3.
 **** Phase 1 — Inventory freeze (documentation only)
-***** AI-DO Record a per-commit disposition table for all 73 commits
+***** AI-DONE Record a per-commit disposition table for all 73 commits
 - For each commit in =git log --oneline --no-merges origin/master..orga=
   assign exactly one disposition: =UPSTREAM= (generic seam to submit),
   =MOVE-TO-SIRO= (Siroic-specific, relocate to =~/siro-orga=), =DROP=
@@ -1980,6 +1994,91 @@ seams, then retire.
 - Store the table in =gptel.org= under this TODO so it survives the
   session and other users can review it.
 - Flag any commit that cannot be classified — those are the real risk.
+****** Disposition table (baseline: orga @ d7d2f1b, 70 non-merge commits vs origin/master)
+- Summary: UPSTREAM 20, MOVE-TO-SIRO 5, TAKE-UPSTREAM 3, DROP 42, UNCLEAR 0.
+- Borderline commits to re-check during Phase 2/3: =387a94d= (UPSTREAM,
+  becomes DROP if siro-orga bypasses gptel's pending-calls confirmation
+  path), =39fa510= (DROP, reclassify UPSTREAM if submodule pointer
+  =bbed19f= holds tests for a kept seam), =2284e84=/=506b3d5= (UPSTREAM
+  gap-fills, become DROP if upstream deliberately omits claude-opus-5
+  from anthropic/bedrock backends).
+- Non-obvious calls: =9140658=, =cc2a806=, =fb09ef5= are UPSTREAM (not
+  MOVE-TO-SIRO) — upstream tip still lacks these generic FSM fixes.
+  =ea0b127=/=12db56a= are TAKE-UPSTREAM — upstream already ships
+  claude-sonnet-5.
+
+| hash | subject | disposition | note |
+|---------+--------------------------------------------------------------+---------------+------------------------------------------------|
+| d7d2f1b | gptel.org: record user feedback on fork-retirement TODO | DROP | doc only |
+| 64cc17c | Add AI-DO: update gptel from upstream, plan fork retirement | DROP | doc only |
+| a197d1e | Document test submodule push/pull | DROP | doc only |
+| 2bfe095 | Mark sanitize-tool-result TODO AI-DONE | DROP | doc bookkeeping |
+| 7b5fce6 | Sanitize tool-result strings before JSON serialization | UPSTREAM | gptel--sanitize-string seam |
+| f075a7a | Add AI-DO: sanitize tool-result strings | DROP | doc bookkeeping |
+| 67090c1 | Kill in-flight tool subprocesses on gptel-abort | UPSTREAM | gptel--kill-tool-processes seam |
+| 2c11ee1 | Add AI-DO: kill in-flight tool subprocesses | DROP | doc bookkeeping |
+| 875e39e | updated task | DROP | doc only |
+| b5f5ef7 | gptel.org: close 'Suppress empty reasoning headings' | DROP | doc bookkeeping |
+| 279e9aa | gptel-anthropic: suppress empty reasoning blocks | UPSTREAM | empty-reasoning guard |
+| 524255c | docs: add AI-DO to suppress empty reasoning headings | DROP | doc bookkeeping |
+| 3fd6d68 | gptel-tool: add org-output slot | MOVE-TO-SIRO | org-output slot (→ generic :properties, D6) |
+| 506b3d5 | Add claude-opus-5 to Bedrock model map; update NEWS | UPSTREAM | gap-fill; NEWS hunk may collide on merge |
+| 2284e84 | Add claude-opus-5 to Anthropic known models | UPSTREAM | gap-fill |
+| e8fb320 | Propagate pre-tool hook errors in gptel--handle-pre-tool | MOVE-TO-SIRO | pre-tool hook error propagation |
+| 4d094f7 | Add gptel--current-tool-call dynamic var | UPSTREAM | gptel--current-tool-call seam |
+| b74449a | gptel-abort: accept optional REASON and CAUSE | UPSTREAM | abort REASON/CAUSE seam |
+| 9140658 | fix(fsm): pass gptel-send--transitions table at menu/rewrite | UPSTREAM | generic fix; upstream tip still lacks :table |
+| 387a94d | gptel-request: tool-call plist in pending confirmations | UPSTREAM | borderline; see notes above |
+| 4017d57 | Reverted adaptive thinking for sonnet-5 | DROP | reverted work |
+| 39fa510 | changed commit hash | DROP | submodule pointer; borderline, see notes |
+| 2be0324 | Revert adaptive thinking-effort | DROP | revert of 3fc204f |
+| 6e58e53 | docs: AI-DO capability-gating Anthropic effort | DROP | doc bookkeeping |
+| ea0b127 | feat(anthropic): add claude-sonnet-5 | TAKE-UPSTREAM | upstream already has claude-sonnet-5 |
+| 12db56a | feat(anthropic): add claude-sonnet-5 | TAKE-UPSTREAM | duplicate sibling of ea0b127 |
+| 4f77c69 | docs(ai): thinking-effort TODO AI-DONE | DROP | doc bookkeeping |
+| 3fc204f | feat(anthropic): gptel-thinking-effort adaptive thinking | DROP | reverted by 2be0324 |
+| f60c661 | docs(ai): record decisions on thinking-effort TODO | DROP | doc bookkeeping |
+| 9b55bde | docs(ai): plan TODO for adaptive thinking effort | DROP | doc bookkeeping |
+| 004ba1a | Output begin_src gptel-tool blocks instead of begin_tool | MOVE-TO-SIRO | tool-result block formatting |
+| fb09ef5 | fix(fsm): guard post-response hooks against nil markers | UPSTREAM | generic nil-marker fix |
+| 6dfcd7e | test(fsm): bump test submodule for current-fsm tests | UPSTREAM | tests for current-fsm seam |
+| 116b15f | feat(fsm): bind gptel--current-fsm around handlers | UPSTREAM | current-fsm + gptel-current-info seam |
+| c37190b | Revert prompt-boundary configurable | DROP | revert |
+| d8d876c | Revert docs follow-up AI-DO sentence boundary | DROP | revert of doc |
+| 8bfbd41 | docs: gptel-org.el conflict-resolution TODO AI-DONE | DROP | doc bookkeeping |
+| 02078ff | Fix incorrect org formatting | DROP | doc only |
+| 0bb94d3 | docs: TODO to resolve gptel-org.el merge conflict | DROP | doc bookkeeping |
+| 85e0f55 | docs: follow-up AI-DO sentence boundary failure | DROP | doc; reverted |
+| 5d63a4d | feat(gptel-request): prompt boundary configurable (re-apply) | DROP | reverted by c37190b |
+| 4324642 | Revert prompt-boundary configurable (first) | DROP | revert |
+| d1fcacc | feat(gptel-request): prompt boundary configurable | DROP | reverted by 4324642 |
+| 3ac268c | docs: AI-DO make prompt boundary configurable | DROP | doc bookkeeping |
+| a3fb401 | docs: buffer-preference TODO done, test-infra follow-up | DROP | doc bookkeeping |
+| 8a72b7f | feat(context): prefer live visiting buffer over disk | UPSTREAM | gptel-context-prefer-buffer seam |
+| a7f1993 | docs: AI-DO buffer-preferring file context | DROP | doc bookkeeping |
+| c1b0385 | gptel.org: AI-DONE reasoning storage to REASONED headings | DROP | doc bookkeeping |
+| 1956b29 | gptel: drop reasoning fences and 'ignore prop for org-mode | MOVE-TO-SIRO | org REASONED reasoning path |
+| 2827523 | gptel.org: parse-the-live-org-buffer TODO -> AI-DONE | DROP | doc bookkeeping |
+| f18959e | Add task | DROP | doc only |
+| a70b9a9 | org: mark tool-call TODO-state phase AI-DONE | DROP | doc bookkeeping |
+| e6ccb83 | hooks: expose tool-call :id in pre/post-tool-call plists | UPSTREAM | :id in hook plists seam |
+| 140034a | gptel.org: mark lineage walker AI-DONE | DROP | doc bookkeeping |
+| afb8ef8 | gptel.org: mark Phase 3 AI-DONE | DROP | doc bookkeeping |
+| 253d22b | gptel.org: mark Phase 2 AI-DONE | DROP | doc bookkeeping |
+| e44adde | gptel.org: Mark Phase 1 sub-AI-DOs DONE | DROP | doc bookkeeping |
+| adadf91 | gptel.org: follow-up AI-DOs IB producer side | DROP | doc bookkeeping |
+| 0206ffc | docs(tool-calls): correlation-ID decision | DROP | doc bookkeeping |
+| 5b3b48b | gptel.org: resolve FEEDBACK on buffer-copy TODO | DROP | doc bookkeeping |
+| cc2a806 | gptel-request: record gptel--fsm-last on ABRT | UPSTREAM | generic; mirrors DONE/ERRS rows |
+| 320b629 | gptel: Add gptel-{pre,post}-reasoning-hook | UPSTREAM | reasoning hooks seam |
+| e4ac714 | gptel-org: Drop GPTEL_BOUNDS property persistence | MOVE-TO-SIRO | GPTEL_BOUNDS removal |
+| caf3f26 | gptel-request: Validate required tool-call args | UPSTREAM | gptel--validate-tool-args seam |
+| a1500c6 | gptel-org: Move read-only strip inside branching loop | UPSTREAM | read-only stripping refinement |
+| d8ba9c7 | gptel-org: Strip read-only props in branching-context | UPSTREAM | read-only stripping seam |
+| aa94b04 | gptel-request: Strip read-only props from copied buffer | UPSTREAM | read-only stripping seam |
+| d3e80d2 | gptel.org: GPTEL_PRESET send-with-props TODO | DROP | doc bookkeeping |
+| bf867c3 | gptel-org: Honor GPTEL_PRESET in send-with-props | TAKE-UPSTREAM | upstream fc69636 supersedes |
+| 16c8f72 | Add project doc stub | DROP | doc stub |
 **** Phase 2 — Shrink the fork (before touching upstream)
 ***** AI-DO Delete our GPTEL_PRESET implementation in =gptel-org--send-with-props=
 - Revert our =bf867c3= / =d3e80d2= changes so the function returns to
@@ -2018,8 +2117,9 @@ seams, then retire.
 - Any failure here is a relocation bug, not an upstream problem — fix it
   before Phase 3.
 **** Phase 3 — Absorb upstream
-***** AI-DO Decide rebase vs merge and record the decision
+***** AI-DONE Decide rebase vs merge and record the decision
 - See Q1.  Needs user input; do not proceed on a guess.
+- Decided by user feedback: MERGE (Decision D4).
 ***** AI-DO Absorb the 38 upstream commits and resolve the known conflicts
 - Expected remaining conflicts after Phase 2, in order:
   =gptel-request.el= vs the curl stdin/=--config= overhaul (=cb0552a=,
@@ -2080,6 +2180,15 @@ seams, then retire.
 - Keep the deprecated-fork archaeology note: fork history remains the
   record of why each seam exists.
 *** Outcomes / Results
-- Not started.  Fill in per-phase results, the Phase 0 test baseline,
-  the Phase 1 disposition table, and the Phase 4 per-unit upstream
+- Phase 0 baseline (2026-08-11, branch =feature/fork-retirement= off
+  =orga= @ =d7d2f1b=): 11/11 tests pass in =tests/gptel-request-test.el=
+  (all =gptel--sanitize-string= variants), 0 failures.  Command:
+  =emacs -Q -batch -L . -L ~/.emacs.d/elpa/compat-31.0.0.2 --eval "(setq debug-on-error t)" -l ert -l tests/gptel-request-test.el -f ert-run-tests-batch-and-exit=.
+- Phase 1 disposition table recorded (see Phase 1 sub-task): 70
+  commits — UPSTREAM 20, MOVE-TO-SIRO 5, TAKE-UPSTREAM 3, DROP 42.
+- Work branch: =feature/fork-retirement= in =~/gptel=.
+- PR-tracking TODO created in siro-orga.org (=TODOs future plans= →
+  =Submit gptel seam patches upstream (karthink/gptel)=), commit
+  =eb49633= on =feature/gptel-callback-migration=.
+  Fill in per-phase results and the Phase 4 per-unit upstream
   status here as work proceeds.
