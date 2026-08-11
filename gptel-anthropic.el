@@ -266,9 +266,7 @@ Mutate state INFO with response metadata."
       (plist-put prompts-plist :tools
                  (vconcat
                   (list (gptel--parse-schema backend gptel--schema))
-                  (plist-get prompts-plist :tools)))
-      (plist-put prompts-plist :tool_choice
-                 `(:type "tool" :name ,gptel--ersatz-json-tool)))
+                  (plist-get prompts-plist :tools))))
     ;; Merge request params with model and backend params.
     (gptel--merge-plists
      prompts-plist
@@ -573,7 +571,7 @@ Media files, if present, are placed in `gptel-context'."
 
 (defconst gptel--anthropic-models
   '((claude-sonnet-5
-     :description "Newest and smartest Sonnet — best combination of speed and intelligence"
+     :description "The best combination of speed and intelligence"
      :capabilities (media tool-use cache)
      :mime-types ("image/jpeg" "image/png" "image/gif" "image/webp" "application/pdf")
      :context-window 1000
