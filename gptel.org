@@ -1936,6 +1936,11 @@ tracked; late sentinel after abort does not corrupt FSM state.
 - Q3: Should the =org-output= slot on the =gptel-tool= struct become a
   siro-side registry keyed by tool name, or be proposed upstream as a
   generic =:properties= plist slot?
+**** FEEDBACK Answer
+1. b
+2. b
+3. generic properties in the permanent fork
+Make a todo into [[file:../siro-orga/siro-orga.org::*TODOs future plans][TODOs future plans]] with a sub todo for each patch so in the future we can submit PR upstream 
 *** Mission
 Bring the =orga= fork up to date with upstream =karthink/gptel=, and
 reduce the fork to a set of generic, upstreamable seams so that
