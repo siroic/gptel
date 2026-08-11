@@ -2109,6 +2109,18 @@ seams, then retire.
   containing =#+begin_src gptel-tool= history blocks through
   =gptel-org--create-prompt= (whose block-stripping now expects
   upstream =#+begin_tool= delimiters).
+- Audit result (2026-08-11): NO LEAK.  The main-turn path uses the
+  =siro-orga-send--prompt= transform, which ERASES gptel's org-parsed
+  prompt buffer and rebuilds it with siro's own walker; that walker
+  correctly unwraps =#+begin_src gptel-tool= blocks
+  (=siro-gptel-headings-unwrap-tool-block=,
+  siro-gptel-headings.el:1532).  The sub-agent path passes an explicit
+  string PROMPT, so =gptel-org--create-prompt-buffer= is never reached
+  (gptel-request.el:2344, =stringp= branch).  No remediation needed.
+  Edge case noted and accepted (not a siro-orga flow): a user manually
+  running =M-x gptel-send= in a siro chat buffer gets vanilla
+  transforms, and old =#+begin_src gptel-tool= history blocks would not
+  be stripped.
 ***** AI-DONE Move the org REASONED reasoning path out of gptel into siro-orga
 - Keep ONLY the generic =gptel-pre-reasoning-hook= /
   =gptel-post-reasoning-hook= additions in gptel; restore
@@ -2238,7 +2250,23 @@ seams, then retire.
 ***** AI-DO Submit upstream and track acceptance
 - Depends on Q2.  Record per-unit status (submitted / merged /
   rejected) in =Outcomes= so the retirement gate is auditable.
+- Blocker resolved (2026-08-11): the =gptel-fork-*= test-prefix issue is
+  fixed — all 13 patches now carry per-unit test prefixes (e.g.
+  =gptel-abort-test-=, =gptel-tool-args-test-=), documented in the
+  prefix table in =patches/README.org=.  Commit =a3c2e68= on
+  =feature/fork-retirement=.
+- Submission is currently blocked on tooling: the GitHub CLI (=gh=) is
+  NOT installed on this machine, so opening the PRs requires user
+  action — either the GitHub web UI or installing =gh= first.
+- Per Decision D5 submission is opportunistic (the permanent minimal
+  fork is the accepted end-state); per-unit submitted / merged /
+  rejected status is tracked in the siro-orga.org PR-tracking TODO.
 **** Phase 5 — Retire the fork
+Per Decision D5 the end-state is a PERMANENT MINIMAL FORK, so the
+vanilla-switch sub-tasks below apply only if/when all seam units are
+actually merged upstream.  Until that happens Phase 5 is dormant: the
+fork is maintained by periodically merging upstream into the fork
+branch, and no retirement gate is attempted.
 ***** AI-DO Introduce =siro-gptel-compat.el= as the shrinking shim
 - Provides ONLY the seams not yet accepted upstream, additively (new
   defvars/hooks), never by redefining or advising gptel functions.
@@ -2296,6 +2324,17 @@ seams, then retire.
   --check=-clean against =origin/master=, per-unit tests embedded (28
   tests, green per-unit on vanilla), =patches/README.org= with
   rationale and conflict notes.
-- Next: Phase 4 seam-unit PR preparation (opportunistic per D5,
-  tracked in siro-orga.org) and Phase 5 retirement gate after the
-  live smoke test passes.
+- Session update (2026-08-11, by urho's session): (a) the Phase 3 audit
+  item is CLOSED with verdict NO LEAK — siro's main-turn transform
+  erases gptel's org parse and siro's walker unwraps gptel-tool blocks,
+  and the sub-agent path passes a string PROMPT so org is never parsed;
+  only a manual =M-x gptel-send= in a siro chat buffer is affected, which
+  is accepted.  (b) Per-unit test prefixes renamed across all 13 patches
+  (=a3c2e68=), replacing =gptel-fork-*=; 13/13 =git apply --check= clean
+  against vanilla =origin/master= and 28/28 embedded tests green
+  per-unit.  (c) Phase 4 submission is blocked on =gh= not being
+  installed here — needs user action.  (d) Phase 5 is dormant per D5
+  (permanent minimal fork end-state).
+- Next: user-driven PR submission (opportunistic, web UI or after
+  installing =gh=) plus the live interactive smoke test in a dev
+  session.
