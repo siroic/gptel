@@ -528,46 +528,16 @@ configuration, use that for requests instead.  This includes the
 system message, model and provider (backend), among other
 parameters.
 
-When the heading declares =GPTEL_PRESET=, the preset is expanded
-and its values are used unless the heading also sets an explicit
-=GPTEL_*= property for the same setting.  Priority for each
-setting is: org explicit property > preset value > buffer
-default.
-
 ARGS are the original function call arguments."
   (if (derived-mode-p 'org-mode)
-      (pcase-let*
-          ((`(,org-preset ,org-system ,org-backend ,org-model
-              ,org-temperature ,org-tokens ,org-num ,org-tools)
-            (gptel-org--entry-properties))
-           (`(,preset-system ,preset-backend ,preset-model
-              ,preset-temperature ,preset-tokens ,preset-num ,preset-tools)
-            (if org-preset
-                (let (p-system p-backend p-model
-                      p-temperature p-tokens p-num p-tools)
-                  (gptel--apply-preset
-                   org-preset
-                   (lambda (sym val)
-                     (pcase sym
-                       ('gptel-system-prompt         (setq p-system val))
-                       ('gptel-backend               (setq p-backend val))
-                       ('gptel-model                 (setq p-model val))
-                       ('gptel-temperature           (setq p-temperature val))
-                       ('gptel-max-tokens            (setq p-tokens val))
-                       ('gptel--num-messages-to-send (setq p-num val))
-                       ('gptel-tools                 (setq p-tools val)))))
-                  (list p-system p-backend p-model
-                        p-temperature p-tokens p-num p-tools))
-              (list nil nil nil nil nil nil nil)))
-           (gptel--preset         (or org-preset      gptel--preset))
-           (gptel-system-prompt   (or org-system      preset-system      gptel-system-prompt))
-           (gptel-backend         (or org-backend     preset-backend     gptel-backend))
-           (gptel-model           (or org-model       preset-model       gptel-model))
-           (gptel-temperature     (or org-temperature preset-temperature gptel-temperature))
-           (gptel-max-tokens      (or org-tokens      preset-tokens      gptel-max-tokens))
-           (gptel--num-messages-to-send
-            (or org-num preset-num gptel--num-messages-to-send))
-           (gptel-tools           (or org-tools       preset-tools       gptel-tools)))
+      (pcase-let ((`( ,gptel--preset ,gptel-system-prompt ,gptel-backend
+                      ,gptel-model ,gptel-temperature ,gptel-max-tokens
+                      ,gptel--num-messages-to-send ,gptel-tools)
+                   (seq-mapn (lambda (a b) (or a b))
+                             (gptel-org--entry-properties)
+                             (list gptel--preset gptel-system-prompt gptel-backend
+                                   gptel-model gptel-temperature gptel-max-tokens
+                                   gptel--num-messages-to-send gptel-tools))))
         (apply send-fun args))
     (apply send-fun args)))
 
