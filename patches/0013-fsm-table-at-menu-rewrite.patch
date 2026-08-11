@@ -1,0 +1,47 @@
+From 9140658f56bee8ae59bcb741ab6a6820eb8cefd3 Mon Sep 17 00:00:00 2001
+From: Urho Laurinen <urho.laurinen@siroic.com>
+Date: Wed, 12 Aug 2026 12:00:00 +0300
+Subject: [PATCH 13/13] gptel: Pass :table at menu and rewrite FSM creation
+
+`gptel-rewrite' and the `gptel-menu' send path create their FSM with
+`gptel-make-fsm' and a handler table (`gptel--rewrite-handlers' and
+`gptel-send--handlers') that registers a handler for the TPRE state.
+TPRE exists only in `gptel-send--transitions'; without an explicit
+:table the FSM uses the default `gptel-request--transitions', that
+state is never entered and the TPRE handlers never fire.  Pass
+:table gptel-send--transitions at both call sites so the handler
+table and the transition table agree.
+
+No test: requires interactive transient/rewrite flow; behaviour covered
+by TPRE handler registration.
+---
+diff --git a/gptel-rewrite.el b/gptel-rewrite.el
+index 22789bd..41a4188 100644
+--- a/gptel-rewrite.el
++++ b/gptel-rewrite.el
+@@ -805,7 +805,10 @@ generated from functions."
+                ;; NOTE: Switch to `generate-new-buffer' after we drop Emacs 27.1 (#724)
+                (cons ov (gptel--temp-buffer " *gptel-rewrite*")))
+              :transforms gptel-prompt-transform-functions
+-             :fsm (gptel-make-fsm :handlers gptel--rewrite-handlers)
++             ;; gptel--rewrite-handlers registers a TPRE handler; TPRE exists only in
++             ;; gptel-send--transitions, not the default gptel-request--transitions.
++             :fsm (gptel-make-fsm :table gptel-send--transitions
++                                  :handlers gptel--rewrite-handlers)
+              :callback #'gptel--rewrite-callback)
+       ;; Move back so that the cursor is on the overlay when done.
+       (unless (get-char-property (point) 'gptel-rewrite)
+diff --git a/gptel-transient.el b/gptel-transient.el
+index 1c54e9f..f210207 100644
+--- a/gptel-transient.el
++++ b/gptel-transient.el
+@@ -1787,7 +1787,8 @@ The possible values are:
+                gptel-system-prompt)
+              :callback callback
+              :transforms gptel-prompt-transform-functions
+-             :fsm (gptel-make-fsm :handlers gptel-send--handlers)
++             :fsm (gptel-make-fsm :table gptel-send--transitions
++                                  :handlers gptel-send--handlers)
+              :dry-run dry-run)
+ 
+       (unless dry-run

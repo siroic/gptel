@@ -1,0 +1,41 @@
+From b96fde656a352527208a2020dc089c6773df3c2a Mon Sep 17 00:00:00 2001
+From: Urho Laurinen <urho.laurinen@siroic.com>
+Date: Wed, 12 Aug 2026 12:00:00 +0300
+Subject: [PATCH 10/12] gptel: Let pre-tool-call hook errors propagate
+
+`gptel-pre-tool-call-functions' are gatekeepers: a hook may return
+:stop to abort the request before a tool runs.  Wrapping the call in
+`with-demoted-errors' means a hook that fails -- including one that fails
+while deciding to stop the request -- is merely logged, and the tool then
+runs as if the hook had approved it.  That turns a policy or safety hook
+into a no-op precisely when it is most important, and the message is
+easy to miss mid-response.
+
+Drop the `with-demoted-errors' wrapper so such errors surface through the
+normal request error path.  This is deliberately a behaviour change: a
+buggy hook now fails loudly rather than being ignored.
+
+No test: the change removes error demotion, so the only observable difference is that an error propagates instead of being logged -- a property of the surrounding request error path, not of a unit under test.
+---
+diff --git a/gptel.el b/gptel.el
+index 16110c4..050b603 100644
+--- a/gptel.el
++++ b/gptel.el
+@@ -1507,9 +1507,12 @@ Perform UI updates and run post-response hooks."
+                  (let* ((name (plist-get tool-call :name))
+                         (args (plist-get tool-call :args))
+                         (hook-func-result
+-                         (with-demoted-errors "gptel-pre-tool-call hook error: %S"
+-                           (funcall hook-func (nconc (list :name name :args args)
+-                                                     hook-func-args)))))
++                         ;; Do not demote errors here: `gptel-pre-tool-call-functions'
++                         ;; are gatekeepers that may stop the request, so a genuine
++                         ;; failure in one must propagate instead of being silently
++                         ;; logged and the tool run anyway.
++                         (funcall hook-func (nconc (list :name name :args args)
++                                                   hook-func-args))))
+                    (if (plist-get hook-func-result :stop) ; Stop the request immediately
+                        (let ((reason (or (plist-get hook-func-result :stop-reason)
+                                          (concat "Request stopped by pre-tool-call hook "
+-- 
+2.51.0

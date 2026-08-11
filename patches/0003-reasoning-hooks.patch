@@ -1,0 +1,158 @@
+From 60f36e04979a02a508e49d7f30a19affa978553b Mon Sep 17 00:00:00 2001
+From: Urho Laurinen <urho.laurinen@siroic.com>
+Date: Wed, 12 Aug 2026 12:00:00 +0300
+Subject: [PATCH 03/12] gptel: Add gptel-pre-reasoning-hook and gptel-post-reasoning-hook
+
+gptel has hooks around response insertion (`gptel-pre-response-hook',
+`gptel-post-response-functions', `gptel-post-stream-hook') but none
+around reasoning insertion, so packages cannot react to a reasoning
+block being started or finished -- e.g. to fold it, fontify it, record
+timing, or move point.
+
+Add two normal hooks run in the response buffer: `gptel-pre-reasoning-hook'
+just before the opening reasoning fence is inserted, and
+`gptel-post-reasoning-hook' after the closing fence has been written and
+before any response content follows.  Both are wired into the streaming
+and non-streaming reasoning-insertion paths, and only run when reasoning
+is actually inserted into the response buffer (not when
+`gptel-include-reasoning' is nil or names a separate buffer).
+
+Tests: tests/gptel-reasoning-hooks-test.el (standalone; extracted from the fork's characterization
+suite).
+---
+diff --git a/gptel.el b/gptel.el
+index 16110c4..b401031 100644
+--- a/gptel.el
++++ b/gptel.el
+@@ -263,6 +263,36 @@ to the LLM, and after a text insertion."
+   :type 'hook
+   :group 'gptel)
+ 
++(defcustom gptel-pre-reasoning-hook nil
++  "Hook run before the first reasoning chunk is inserted.
++
++This hook is called in the response buffer with point at the
++reasoning insertion location, just before the opening reasoning
++fence (e.g. `#+begin_reasoning') is inserted.  Each function
++takes no arguments.
++
++The hook only runs when reasoning content is being inserted into
++the response buffer; it does not run when
++`gptel-include-reasoning' (or the request-level
++`:include-reasoning') is nil or names a separate buffer."
++  :type 'hook
++  :group 'gptel)
++
++(defcustom gptel-post-reasoning-hook nil
++  "Hook run after the last reasoning chunk has been inserted.
++
++The reasoning stream has ended and the closing reasoning fence
++(e.g. `#+end_reasoning') has been written, but no subsequent
++response content has been inserted yet.  Runs in the response
++buffer.  Each function takes no arguments.
++
++The hook only runs when reasoning content is being inserted into
++the response buffer; it does not run when
++`gptel-include-reasoning' (or the request-level
++`:include-reasoning') is nil or names a separate buffer."
++  :type 'hook
++  :group 'gptel)
++
+ (defcustom gptel-pre-tool-call-functions nil
+   "Abnormal hook called before each tool call.
+ 
+@@ -1803,6 +1833,7 @@ Optional RAW disables text properties and transformation."
+                                    (plist-get info :include-reasoning))
+                (save-excursion (goto-char (point-max)) (insert text)))
+            (with-current-buffer (marker-buffer start-marker)
++             (run-hooks 'gptel-pre-reasoning-hook)
+              (let ((separator         ;Separate from response prefix if required
+                     (and (not tracking-marker) gptel-mode
+                          (not (string-suffix-p "\n" (gptel-response-prefix-string)))
+@@ -1832,7 +1863,8 @@ Optional RAW disables text properties and transformation."
+                             (when (looking-at "^#\\+end_reasoning")
+                               (org-cycle)))
+                    (when (re-search-backward "^```" start-marker t)
+-                     (gptel-markdown-cycle-block)))))))))
++                     (gptel-markdown-cycle-block)))))
++             (run-hooks 'gptel-post-reasoning-hook)))))
+       (`(tool-call . ,tool-calls)
+        (gptel--display-tool-calls tool-calls info))
+       (`(tool-result . ,tool-results)
+@@ -1971,9 +2003,11 @@ for streaming responses only."
+                                (when (looking-at "^#\\+end_reasoning")
+                                  (org-cycle)))
+                       (when (re-search-backward "^```" start-marker t)
+-                        (gptel-markdown-cycle-block))))))
++                        (gptel-markdown-cycle-block)))))
++                (run-hooks 'gptel-post-reasoning-hook))
+             (unless (and reasoning-marker tracking-marker
+                          (= reasoning-marker tracking-marker))
++              (run-hooks 'gptel-pre-reasoning-hook)
+               (let ((separator        ;Separate from response prefix if required
+                      (and (not tracking-marker) gptel-mode
+                           (not (string-suffix-p
+diff --git a/tests/gptel-reasoning-hooks-test.el b/tests/gptel-reasoning-hooks-test.el
+new file mode 100644
+index 0000000..fef5f1c
+--- /dev/null
++++ b/tests/gptel-reasoning-hooks-test.el
+@@ -0,0 +1,56 @@
++;;; gptel-reasoning-hooks-test.el --- Tests for reasoning hooks -*- lexical-binding: t; -*-
++
++;;; Commentary:
++
++;; Pins the behaviour of `gptel-pre-reasoning-hook' and
++;; `gptel-post-reasoning-hook': both run, in that order, when reasoning
++;; content is inserted into a buffer -- both in the streaming path
++;; (`gptel--display-reasoning-stream') and the non-streaming path
++;; (`gptel--insert-response' with a `reasoning' payload).
++;;
++;; Batch-safe: no network access, no real LLM calls.
++
++;;; Code:
++
++(require 'ert)
++(require 'gptel)
++
++(ert-deftest gptel-reasoning-hooks-test-reasoning-hooks-stream ()
++  "Streaming reasoning runs pre- then post-reasoning hooks."
++  (let* ((buf (generate-new-buffer " *gptel-reasoning-hooks-test-reason*"))
++         (order nil))
++    (unwind-protect
++        (let* ((pos (with-current-buffer buf
++                      (fundamental-mode)
++                      (insert "prefix\n")
++                      (copy-marker (point-max))))
++               (info (list :include-reasoning t :position pos :buffer buf))
++               (gptel-pre-reasoning-hook (list (lambda () (push 'pre order))))
++               (gptel-post-reasoning-hook (list (lambda () (push 'post order)))))
++          (gptel--display-reasoning-stream "thinking..." info)
++          (gptel--display-reasoning-stream t info)
++          (should (equal (nreverse order) '(pre post))))
++      (when (buffer-live-p buf)
++        (with-current-buffer buf (set-buffer-modified-p nil))
++        (kill-buffer buf)))))
++
++(ert-deftest gptel-reasoning-hooks-test-reasoning-hooks-non-streaming ()
++  "Non-streaming reasoning insertion runs pre- then post-reasoning hooks."
++  (let* ((buf (generate-new-buffer " *gptel-reasoning-hooks-test-reason2*"))
++         (order nil))
++    (unwind-protect
++        (let* ((pos (with-current-buffer buf
++                      (fundamental-mode)
++                      (insert "prefix\n")
++                      (copy-marker (point-max))))
++               (info (list :include-reasoning t :position pos :buffer buf))
++               (gptel-pre-reasoning-hook (list (lambda () (push 'pre order))))
++               (gptel-post-reasoning-hook (list (lambda () (push 'post order)))))
++          (gptel--insert-response '(reasoning . "thinking...") info)
++          (should (equal (nreverse order) '(pre post))))
++      (when (buffer-live-p buf)
++        (with-current-buffer buf (set-buffer-modified-p nil))
++        (kill-buffer buf)))))
++
++(provide 'gptel-reasoning-hooks-test)
++;;; gptel-reasoning-hooks-test.el ends here
+-- 
+2.51.0

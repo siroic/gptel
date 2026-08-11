@@ -1535,7 +1535,7 @@ a tool, use `gptel-make-tool', which see."
                           (:constructor gptel--make-tool-internal
                                         (&key function name description args
                                               async category confirm include
-                                              org-output
+                                              properties
                                               &allow-other-keys))
                           (:copier gptel--copy-tool))
   "Struct to specify tools for LLMs to run.
@@ -1556,7 +1556,7 @@ feed the LLM the results.  You can add tools via
                            (const :tag "Include call only, no result" call)
                            (const :tag "Exclude" nil))
            :documentation "Include tool call in buffer?")
-  (org-output nil :type boolean :documentation "Result is org-formatted/org-safe, needs no auto-correction on insertion"))
+  (properties nil :type list :documentation "Plist of extension properties not interpreted by gptel itself (e.g. :org-output)."))
 
 (defun gptel--preprocess-tool-args (spec)
   "Convert symbol :type values in tool SPEC to strings destructively."
@@ -2070,9 +2070,13 @@ skip them."
                    ;; marks the entry as "notification only, nothing to
                    ;; confirm"; use `gptel--pending-tool-calls' to select
                    ;; the entries that actually await confirmation.
-                   (funcall (plist-get info :callback)
-                            (list 'tool-call (list tool-spec args nil tool-call))
-                            info)
+                   ;; Info need not have a :callback (e.g. when handling
+                   ;; tool calls programmatically); skip the notification
+                   ;; then.  Errors from a non-nil callback still signal.
+                   (when-let* ((callback (plist-get info :callback)))
+                     (funcall callback
+                              (list 'tool-call (list tool-spec args nil tool-call))
+                              info))
                    (if-let* ((err (gptel--validate-tool-args tool-spec args)))
                        (funcall process-tool-result err)
                      (let ((arg-values (gptel--map-tool-args tool-spec args))

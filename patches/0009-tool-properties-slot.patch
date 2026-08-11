@@ -1,0 +1,41 @@
+From 6480b2353663439b0d208406104da2761256d09f Mon Sep 17 00:00:00 2001
+From: Urho Laurinen <urho.laurinen@siroic.com>
+Date: Wed, 12 Aug 2026 12:00:00 +0300
+Subject: [PATCH 09/12] gptel: Add a generic properties plist to gptel-tool
+
+`gptel-tool' has no room for metadata that gptel itself does not
+interpret, so extensions that need to annotate a tool (how to render its
+output, which UI affordance to attach, a category of their own) have to
+maintain a parallel table keyed on the tool name, or resort to
+defadvice.
+
+Add a `properties' slot -- a plain plist, accepted by the constructor
+and never read by gptel -- as the documented place for such extension
+data.
+
+No test: the change adds an inert struct slot that gptel never reads; there is no behaviour to pin beyond the constructor accepting the keyword.
+---
+diff --git a/gptel-request.el b/gptel-request.el
+index fc5115c..914799b 100644
+--- a/gptel-request.el
++++ b/gptel-request.el
+@@ -1497,6 +1497,7 @@ a tool, use `gptel-make-tool', which see."
+                           (:constructor gptel--make-tool-internal
+                                         (&key function name description args
+                                               async category confirm include
++                                              properties
+                                               &allow-other-keys))
+                           (:copier gptel--copy-tool))
+   "Struct to specify tools for LLMs to run.
+@@ -1516,7 +1517,8 @@ feed the LLM the results.  You can add tools via
+   (include t :type (choice (const :tag "Include call and result" t)
+                            (const :tag "Include call only, no result" call)
+                            (const :tag "Exclude" nil))
+-           :documentation "Include tool call in buffer?"))
++           :documentation "Include tool call in buffer?")
++  (properties nil :type list :documentation "Plist of extension properties not interpreted by gptel itself (e.g. :org-output)."))
+ 
+ (defun gptel--preprocess-tool-args (spec)
+   "Convert symbol :type values in tool SPEC to strings destructively."
+-- 
+2.51.0

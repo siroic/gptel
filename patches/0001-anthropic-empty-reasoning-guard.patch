@@ -1,0 +1,126 @@
+From 7a92d6d6401726f6a487357e543dc8905a531d52 Mon Sep 17 00:00:00 2001
+From: Urho Laurinen <urho.laurinen@siroic.com>
+Date: Wed, 12 Aug 2026 12:00:00 +0300
+Subject: [PATCH 01/12] anthropic: Don't create reasoning output for empty thinking blocks
+
+The Anthropic API can send a `thinking' content block whose :thinking
+field is absent, not a string, or the empty string -- notably as the
+opening content_block_start of a thinking block whose text arrives only
+later in deltas, and in non-streaming responses that carry a redacted or
+empty thinking block.
+
+gptel unconditionally set :reasoning and :reasoning-block from that
+value, so an empty block produced an empty reasoning section in the
+response buffer (an opening and closing reasoning fence with nothing in
+between), and a non-string value could propagate into `concat'.
+
+Guard all three sites: only set :reasoning / :reasoning-block when the
+thinking text is a non-empty string.  In the delta handler, also set
+:reasoning-block to `in' when thinking deltas arrive, so a block whose
+content_block_start was (correctly) skipped as empty is still recognized
+as an open reasoning block.  Pure bugfix, no new user-facing options.
+
+Tests: tests/gptel-anthropic-empty-reasoning-guard-test.el (standalone; extracted from the fork's characterization
+suite).
+---
+diff --git a/gptel-anthropic.el b/gptel-anthropic.el
+index 02abebd..19ccdf7 100644
+--- a/gptel-anthropic.el
++++ b/gptel-anthropic.el
+@@ -98,8 +98,10 @@ information if the stream contains it.  Not my best work, I know."
+                      info :partial_json
+                      (cons partial-json (plist-get info :partial_json)))
+                   (if-let* ((thinking (plist-get delta :thinking)))
+-                      (plist-put info :reasoning
+-                                 (concat (plist-get info :reasoning) thinking))
++                      (progn
++                        (plist-put info :reasoning
++                                   (concat (plist-get info :reasoning) thinking))
++                        (plist-put info :reasoning-block 'in))
+                     (if-let* ((signature (plist-get delta :signature)))
+                         (plist-put info :signature
+                                    (concat (plist-get info :signature) signature))))))))
+@@ -114,8 +116,11 @@ information if the stream contains it.  Not my best work, I know."
+                                                    :name (plist-get cblock :name)
+                                                    :input nil) ;ensure :input key is always present
+                                              (plist-get info :tool-use))))
+-                ("thinking" (plist-put info :reasoning (plist-get cblock :thinking))
+-                 (plist-put info :reasoning-block 'in)))))
++                ("thinking" (when-let* ((thinking (plist-get cblock :thinking))
++                                        ((stringp thinking))
++                                        ((not (string-empty-p thinking))))
++                              (plist-put info :reasoning thinking)
++                              (plist-put info :reasoning-block 'in))))))
+ 
+            ((looking-at "content_block_stop")
+             (cond
+@@ -196,10 +201,11 @@ Mutate state INFO with response metadata."
+    collect cblock into tool-use
+    else if (equal type "thinking")
+    do
+-   (plist-put
+-    info :reasoning
+-    (concat (plist-get info :reasoning)
+-            (plist-get cblock :thinking)))
++   (when-let* ((thinking (plist-get cblock :thinking))
++               ((stringp thinking))
++               ((not (string-empty-p thinking))))
++     (plist-put info :reasoning
++                (concat (plist-get info :reasoning) thinking)))
+    finally do
+    (when tool-use
+      ;; First, add the tool call to the prompts list
+diff --git a/tests/gptel-anthropic-empty-reasoning-guard-test.el b/tests/gptel-anthropic-empty-reasoning-guard-test.el
+new file mode 100644
+index 0000000..1960508
+--- /dev/null
++++ b/tests/gptel-anthropic-empty-reasoning-guard-test.el
+@@ -0,0 +1,46 @@
++;;; gptel-anthropic-empty-reasoning-guard-test.el --- Tests for empty thinking block guard -*- lexical-binding: t; -*-
++
++;;; Commentary:
++
++;; Pins the behaviour of the Anthropic response parser with respect to
++;; `thinking' content blocks:
++;;
++;; - An EMPTY thinking block must not set `:reasoning' in the info plist at
++;;   all (no empty-string reasoning leaking downstream).
++;; - A NON-EMPTY thinking block is accumulated into `:reasoning'.
++;;
++;; Batch-safe: no network access, no real LLM calls.
++
++;;; Code:
++
++(require 'ert)
++(require 'cl-lib)
++(require 'gptel)
++(require 'gptel-anthropic)
++
++(defun gptel-anthropic-reasoning-test--anthropic-backend ()
++  (gptel--make-anthropic :name "test" :host "example.com"
++                         :endpoint "/v1/messages" :models nil))
++
++(ert-deftest gptel-anthropic-reasoning-test-anthropic-empty-thinking-no-reasoning ()
++  "An empty thinking block does not set :reasoning at all."
++  (let* ((backend (gptel-anthropic-reasoning-test--anthropic-backend))
++         (info (list :data 'ignored))
++         (response (list :content (vector (list :type "thinking" :thinking "")
++                                          (list :type "text" :text "hello"))))
++         (out (gptel--parse-response backend response info)))
++    (should (equal out "hello"))
++    (should-not (plist-member info :reasoning))))
++
++(ert-deftest gptel-anthropic-reasoning-test-anthropic-nonempty-thinking-sets-reasoning ()
++  "A non-empty thinking block is accumulated into info :reasoning."
++  (let* ((backend (gptel-anthropic-reasoning-test--anthropic-backend))
++         (info (list :data 'ignored))
++         (response (list :content (vector (list :type "thinking" :thinking "let me think")
++                                          (list :type "text" :text "hello"))))
++         (out (gptel--parse-response backend response info)))
++    (should (equal out "hello"))
++    (should (equal (plist-get info :reasoning) "let me think"))))
++
++(provide 'gptel-anthropic-empty-reasoning-guard-test)
++;;; gptel-anthropic-empty-reasoning-guard-test.el ends here
+-- 
+2.51.0

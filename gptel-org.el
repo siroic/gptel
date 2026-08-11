@@ -55,6 +55,8 @@
 (declare-function gptel--parse-directive "gptel-request")
 (declare-function gptel--with-buffer-copy "gptel-request")
 (declare-function gptel--file-binary-p "gptel-request")
+(declare-function gptel--get-buffer-bounds "gptel")
+(declare-function gptel--restore-props "gptel")
 (declare-function org-entry-get "org")
 (declare-function org-entry-put "org")
 (declare-function org-with-wide-buffer "org-macs")
@@ -355,39 +357,20 @@ depend on the value of `gptel-org-branching-context', which see."
       (dolist (bounds element-markers)
         (apply #'delete-region bounds)))))
 
-(defun gptel-org--strip-line ()
-  "Delete the current line (from its start), including its newline."
-  (delete-region (line-beginning-position)
-                 (min (point-max) (1+ (line-end-position)))))
-
 (defun gptel-org--strip-block-headers ()
   "Remove all gptel-specific block headers and footers.
 Every line that matches will be removed entirely.
 
-This removal is necessary to avoid auto-mimicry by LLMs.
-
-Tool-result blocks use `#+begin_src gptel-tool' / `#+end_src'; the
-closing `#+end_src' is only stripped when it terminates a gptel-tool
-block, so unrelated source blocks in the context are left intact.
-Reasoning blocks use `#+begin_reasoning' / `#+end_reasoning'."
+This removal is necessary to avoid auto-mimicry by LLMs."
   (save-excursion
     (goto-char (point-min))
     (while (re-search-forward
             (rx line-start (literal "#+")
-                (or (seq (literal "begin_src gptel-tool"))
-                    (seq (or (literal "begin") (literal "end"))
-                         (literal "_reasoning"))))
+                (or (literal "begin") (literal "end"))
+                (or (literal "_tool") (literal "_reasoning")))
             nil t)
-      (let ((tool-block (save-excursion
-                          (goto-char (match-beginning 0))
-                          (looking-at-p "#\\+begin_src gptel-tool"))))
-        (goto-char (match-beginning 0))
-        (gptel-org--strip-line)
-        (when tool-block
-          ;; Remove the matching `#+end_src' that closes this block.
-          (when (re-search-forward (rx line-start (literal "#+end_src")) nil t)
-            (goto-char (match-beginning 0))
-            (gptel-org--strip-line)))))))
+      (delete-region (match-beginning 0)
+                     (min (point-max) (1+ (line-end-position)))))))
 
 (defun gptel-org--unescape-tool-results ()
   "Undo escapes done to keep results from escaping blocks.
@@ -405,7 +388,7 @@ contents."
             ;; User edits to clean up can potentially insert a tool-call header
             ;; that is propertized.  Tool call headers should not be
             ;; propertized.
-            (when (looking-at "[[:space:]]*#\\+begin_src gptel-tool")
+            (when (looking-at-p "[[:space:]]*#\\+begin_tool")
               (goto-char (match-end 0)))
             ;; TODO this code is able to put the point behind prev-pt, which
             ;; makes the region inverted.  The `max' catches this, but really
@@ -609,8 +592,8 @@ ARGS are the original function call arguments."
     (widen)
     (condition-case status
         (progn
-          ;; GPTEL_BOUNDS persistence removed: response bounds are now
-          ;; recovered from heading structure by siro-gptel-parse.
+          (when-let* ((bounds (org-entry-get (point-min) "GPTEL_BOUNDS")))
+            (gptel--restore-props (read bounds)))
           (pcase-let ((`(,preset ,system ,backend ,model ,temperature ,tokens ,num ,tools)
                        (gptel-org--entry-properties (point-min))))
             (when preset
@@ -707,9 +690,19 @@ send in queries.  (See `gptel--num-messages-to-send' for the last one.)"
    (when (org-at-heading-p)
      (org-open-line 1))
    (gptel-org-set-properties (point-min))
-   ;; GPTEL_BOUNDS persistence removed: response bounds are now recovered
-   ;; from heading structure by siro-gptel-parse on subsequent loads.
-   ))
+   ;; Save response boundaries
+   (letrec ((write-bounds
+             (lambda (attempts)
+               (when-let* ((bounds (gptel--get-buffer-bounds))
+                           ;; first value of ((prop . ((beg end val)...))...)
+                           (offset (caadar bounds))
+                           (offset-marker (set-marker (make-marker) offset)))
+                 (org-entry-put (point-min) "GPTEL_BOUNDS"
+                                (prin1-to-string (gptel--get-buffer-bounds)))
+                 (when (and (not (= (marker-position offset-marker) offset))
+                            (> attempts 0))
+                   (funcall write-bounds (1- attempts)))))))
+     (funcall write-bounds 6))))
 
 
 ;;; Transforming responses

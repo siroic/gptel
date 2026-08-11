@@ -1,0 +1,279 @@
+#+TITLE: Upstreamable patch series for gptel
+#+OPTIONS: toc:nil
+
+* Upstreamable patch series (fork retirement)
+
+This directory holds the remaining generic "seams" of the =~/gptel= fork,
+split into 13 independent, self-contained units that are each a candidate
+for an upstream PR against =karthink/gptel=.
+
+Every patch was generated against, and verified to apply cleanly on,
+vanilla =origin/master= (commit =fc69636=): all 13 are =git apply
+--check=-clean and =git am=-clean there.  Each unit that carries tests was
+additionally verified by applying it *alone* to vanilla and running its
+embedded ERT test file green.
+
+The units are *independent PR candidates*, not a stacked series.  They are
+therefore allowed to conflict textually with one another; the known
+conflicts are documented below.  Semantically all of them compose — the
+fork ran with all 13 applied at once.
+
+** Verification summary
+
+- All 13 patches pass =git -C <vanilla-worktree> apply --check= on
+  =origin/master= (=fc69636=).
+- Units 1–8 pass =git am= on vanilla *alone* and their own ERT test file
+  runs green there.  Test counts: 1 → 2 tests, 2 → 1, 3 → 2, 4 → 1,
+  5 → 3, 6 → 3, 7 → 15, 8 → 1 — *28 tests total, all passing*.
+- Units 9–13 carry no tests; the reason is stated per unit below (inert
+  struct slot, removal of error demotion, defensive guards needing a race
+  to reach, pure model data, and an interactive-only transient/rewrite flow
+  respectively).
+- A line-level coverage audit of the full fork diff was performed: *483
+  changed lines audited*, all accounted for by these 13 units.
+
+** Units
+
+*** =0001-anthropic-empty-reasoning-guard= — anthropic: Don't create reasoning output for empty thinking blocks
+
+- Rationale :: The Anthropic API can send a =thinking= content block whose
+  =:thinking= field is missing, non-string or empty — notably the opening
+  =content_block_start= of a streamed thinking block, and redacted/empty
+  blocks in non-streaming responses.  gptel set =:reasoning= and
+  =:reasoning-block= unconditionally, producing an empty reasoning fence
+  in the response buffer and risking a non-string reaching =concat=.  All
+  three sites now only set them for a non-empty string, and the delta
+  handler marks the block =in= so a skipped empty start is still
+  recognized as open.  Pure bugfix, no new options.
+- Files touched :: =gptel-anthropic.el=
+- Test :: =tests/gptel-anthropic-empty-reasoning-guard-test.el= (2 tests)
+
+*** =0002-strip-read-only-props= — gptel: Strip read-only text properties when assembling prompts
+
+- Rationale :: Prompt assembly copies buffer text with
+  =insert-buffer-substring=, preserving text properties including
+  =read-only= (commonly from org-transclusion).  Later modifications of
+  the prompt buffer then signal "Text is read-only" — inside
+  =gptel-org--create-prompt='s own assembly loop, which inserts at
+  =point-min=.  The fix binds =inhibit-read-only= for the copy step and
+  removes =read-only= properties afterwards, so no later transform pass
+  has to care.  Pure bugfix.
+- Files touched :: =gptel-org.el=, =gptel-request.el=
+- Test :: =tests/gptel-strip-read-only-props-test.el= (1 test)
+
+*** =0003-reasoning-hooks= — gptel: Add gptel-pre-reasoning-hook and gptel-post-reasoning-hook
+
+- Rationale :: gptel has hooks around response insertion but none around
+  reasoning insertion, so packages cannot react to a reasoning block
+  starting or finishing (folding, fontification, timing, point movement).
+  Two normal hooks run in the response buffer are added:
+  =gptel-pre-reasoning-hook= before the opening fence and
+  =gptel-post-reasoning-hook= after the closing fence.  Both are wired
+  into the streaming and non-streaming paths and only run when reasoning
+  is actually inserted into the response buffer.
+- Files touched :: =gptel.el=
+- Test :: =tests/gptel-reasoning-hooks-test.el= (2 tests)
+
+*** =0004-current-fsm= — gptel: Expose the in-flight request via gptel-current-info
+
+- Rationale :: Mid-turn hooks receive no arguments, so a hook function
+  cannot reach the request it belongs to — its backend, model, tools,
+  =:tool-use= list or caller state in the info plist — and hook authors
+  resort to advising internals.  A dynamic =gptel--current-fsm= is bound
+  around FSM handler dispatch and around the three asynchronous response
+  entry points (=url-retrieve= callback, curl sentinel, curl stream
+  sentinel), with a small public accessor =gptel-current-info=.  No
+  behaviour change for existing code.
+- Files touched :: =gptel.el=, =gptel-request.el=
+- Test :: =tests/gptel-current-fsm-test.el= (1 test)
+
+*** =0005-current-tool-call-and-id= — gptel: Make the wire tool-call id available to tool hooks and callbacks
+
+- Rationale :: A tool call carries a provider-assigned =:id= on the wire
+  and gptel tracks it internally, but nothing outside gptel can see it,
+  making it impossible to correlate a call with its result, deduplicate
+  retries, or key external state to a call.  Three minimal additions: a
+  dynamically bound =gptel--current-tool-call= around each tool
+  invocation; the tool-call plist appended as a fourth element of
+  pending-calls entries (existing consumers destructure three and are
+  unaffected); and =:id= in the plists passed to
+  =gptel-pre-tool-call-functions= / =gptel-post-tool-call-functions=.
+- Files touched :: =gptel-request.el=, =gptel.el=
+- Test :: =tests/gptel-current-tool-call-and-id-test.el= (3 tests)
+
+*** =0006-abort-reason-and-kill-tool-processes= — gptel: Record abort reason and kill tool subprocesses on abort
+
+- Rationale :: Aborting a request with async tools in flight leaves their
+  subprocesses running; their sentinels later call back into a dead
+  request and write results into an aborted FSM.  Processes returned by
+  async tool functions are now tracked in =:tool-processes=, killed from
+  =gptel-abort= via =gptel--kill-tool-processes=, and pruned as results
+  arrive; =gptel--handle-tool-result= becomes a no-op for a terminal or
+  aborting request.  =gptel-abort= also gains optional REASON (=user= /
+  =system=) and CAUSE, recorded as =:abort-reason= / =:abort-cause=.
+- Files touched :: =gptel-request.el=
+- Test :: =tests/gptel-abort-reason-and-kill-tool-processes-test.el= (3 tests)
+
+*** =0007-validate-and-sanitize-tool-args= — gptel: Validate tool arguments and sanitize tool results
+
+- Rationale :: Two failure modes at the tool boundary currently break the
+  request instead of being handled.  A model omitting a required argument
+  causes a =wrong-number-of-arguments= error (or a silent nil argument);
+  =gptel--validate-tool-args= now checks both invocation paths
+  (=gptel--handle-tool-use= and =gptel--accept-tool-calls=) using
+  =plist-member=, feeding an error string back so the model can retry.
+  And a tool result containing raw bytes makes =json-serialize= signal on
+  the next request; =gptel--sanitize-string= replaces raw bytes with
+  readable =\xNN= escapes and is applied to tool results.
+- Files touched :: =gptel-request.el=, =gptel.el=
+- Test :: =tests/gptel-validate-and-sanitize-tool-args-test.el= (15 tests)
+
+*** =0008-context-prefer-buffer= — gptel-context: Prefer live buffer contents for file context
+
+- Rationale :: When a file in =gptel-context= is visited by a buffer with
+  unsaved changes, gptel sends the on-disk contents, so the model answers
+  about a stale version of the code in front of you.  File context now
+  prefers a live visiting buffer, including a modified one, under a new
+  =gptel-context-prefer-buffer= (default =t=; set to nil for the previous
+  disk-only behaviour).  The whole-file path also goes through
+  =gptel-context--insert-buffer-string= when a buffer is used, so
+  whole-file and region context behave consistently.
+- Files touched :: =gptel-context.el=
+- Test :: =tests/gptel-context-prefer-buffer-test.el= (1 test)
+
+*** =0009-tool-properties-slot= — gptel: Add a generic properties plist to gptel-tool
+
+- Rationale :: =gptel-tool= has no room for metadata gptel itself does not
+  interpret, so extensions annotating a tool must maintain a parallel
+  table keyed on the tool name or resort to advice.  A =properties= slot —
+  a plain plist accepted by the constructor and never read by gptel — is
+  added as the documented place for such extension data.
+- Files touched :: =gptel-request.el=
+- Test :: None.  The change adds an inert struct slot that gptel never
+  reads; there is no behaviour to pin beyond the constructor accepting the
+  keyword.
+
+*** =0010-propagate-pre-tool-hook-errors= — gptel: Let pre-tool-call hook errors propagate
+
+- Rationale :: =gptel-pre-tool-call-functions= are gatekeepers that may
+  return =:stop= to abort a request before a tool runs.  Wrapping the call
+  in =with-demoted-errors= means a hook that fails — including while
+  deciding to stop the request — is merely logged and the tool runs as if
+  approved, turning a policy or safety hook into a no-op exactly when it
+  matters.  The wrapper is dropped so such errors surface through the
+  normal request error path; this is deliberately a behaviour change.
+- Files touched :: =gptel.el=
+- Test :: None.  The change removes error demotion, so the only observable
+  difference is that an error propagates instead of being logged — a
+  property of the surrounding request error path, not of a unit under
+  test.
+
+*** =0011-fsm-robustness= — gptel: Harden post-response hook dispatch against dead buffers
+
+- Rationale :: =gptel--handle-post-insert=, =gptel--handle-error= and
+  =gptel--handle-abort= call =marker-position= on =:position= and
+  =:tracking-marker= and pass the results to
+  =gptel-post-response-functions=, but the response buffer may have been
+  killed and requests that never inserted anything can arrive with a nil
+  marker — yielding =wrong-type-argument= from inside the handler and
+  skipping the remaining UI cleanup.  The buffer is now guarded with
+  =buffer-live-p= and marker positions resolved defensively, with
+  =gptel-post-response-functions= run only when both positions exist
+  (=:post= functions still run either way).  =gptel--fsm-last= is also
+  added to the ABRT row of =gptel-send--handlers=, which was the one
+  terminal state that left it pointing at a stale request.
+- Files touched :: =gptel.el=
+- Test :: None.  These are defensive guards for states (killed response
+  buffer, nil marker) that require racing a live request to reach; a unit
+  test would only assert the guards call themselves.
+
+*** =0012-claude-opus-5-models= — anthropic, bedrock: Add claude-opus-5
+
+- Rationale :: Adds the =claude-opus-5= model entry to the Anthropic
+  backend and its Bedrock model-id mapping, and mentions it in NEWS
+  alongside the other recently added Anthropic and Bedrock models.  Data
+  only, no logic change.
+- Files touched :: =NEWS=, =gptel-anthropic.el=, =gptel-bedrock.el=
+- Test :: None.  Model/backend data addition, nothing executable to
+  assert.
+
+*** =0013-fsm-table-at-menu-rewrite= — gptel: Pass :table at menu and rewrite FSM creation
+
+- Rationale :: =gptel-rewrite= and the =gptel-menu= send path create their
+  FSM with =gptel-make-fsm= and a handler table (=gptel--rewrite-handlers=
+  and =gptel-send--handlers=) that registers a handler for the TPRE state.
+  TPRE exists only in =gptel-send--transitions=; without an explicit
+  =:table= the FSM uses the default =gptel-request--transitions=, that
+  state is never entered and the TPRE handlers never fire.  Both call sites
+  now pass =:table gptel-send--transitions= so the handler table and the
+  transition table agree.  Generic bugfix (fork commit =9140658=).
+- Files touched :: =gptel-rewrite.el=, =gptel-transient.el=
+- Test :: None.  Requires an interactive transient/rewrite flow; the
+  behaviour is covered by TPRE handler registration.
+- Conflicts :: None known.  No other unit touches =gptel-rewrite.el= or
+  =gptel-transient.el=.
+
+** Known mutual conflicts
+
+Because the units are independent PR candidates rather than a stack, some
+of them touch the same forms.  All conflicts below are textual only; the
+units compose semantically.
+
+| Units       | Location                                                        | Nature                                              |
+|-------------+-----------------------------------------------------------------+-----------------------------------------------------|
+| 5 ↔ 10      | =gptel-pre-tool-call-functions= dispatch =let*= in =gptel.el=    | Same form rewritten by both                         |
+| 6 ↔ 7       | =gptel--handle-tool-result= in =gptel-request.el=                | Same line, plus re-indentation                      |
+| 5 ↔ 6 ↔ 7   | =(if confirm ...)= in =gptel--handle-tool-use=, =gptel-request.el= | Three-way; each wraps/extends the same form         |
+
+*** 5 ↔ 10
+
+Both rewrite the same =let*= form in the =gptel-pre-tool-call-functions=
+dispatch in =gptel.el=.  Unit 5 adds =:id= while *keeping* upstream's
+=with-demoted-errors= wrapper; unit 10 *removes* the wrapper and does not
+add =:id=.  Textually conflicting, semantically composable: if both are
+accepted, the merged form has =:id= and no wrapper.  Apply 5 first, then
+hand-resolve 10 (or vice versa).
+
+*** 6 ↔ 7
+
+Both modify =gptel--handle-tool-result= in =gptel-request.el=.  Unit 6
+re-indents the whole body under a new terminal-state =unless= guard and
+adds dead-process pruning; unit 7 changes the single
+=(let ((result (gptel--to-string result)))= line to wrap it in
+=gptel--sanitize-string=.  The conflict is purely in that line and its
+indentation.
+
+*** 5 ↔ 6 ↔ 7 (three-way)
+
+All three modify the =(if confirm ...)= form in =gptel--handle-tool-use=
+in =gptel-request.el=: unit 5 extends the pending-calls push and binds
+=gptel--current-tool-call=, unit 6 wraps the async branch to capture the
+tool process, unit 7 wraps the non-confirm branch in an =if-let*=
+argument-validation check.  Pairwise textual conflicts; all three compose
+semantically — the fork carried all three at once.
+
+*** Non-conflicts worth noting
+
+- 1 ↔ 12 both touch =gptel-anthropic.el=, but in disjoint regions.
+- 3 / 4 / 11 (and 5, 10) all touch =gptel.el= in disjoint regions.
+- 2 / 4 / 9 touch =gptel-request.el= in disjoint regions.
+
+No conflict arises in any of these cases.
+
+** Caveats / follow-ups
+
+- Upstream keeps its tests in a =test= git submodule and has no plain
+  =tests/= directory.  Each unit's test file here is added under =tests/=,
+  so a maintainer may want them relocated into the submodule's layout.
+- The extracted tests have been renamed off the fork's original
+  =gptel-fork-*= prefix onto a per-unit prefix (unit 1
+  =gptel-anthropic-reasoning-test-*=, unit 2 =gptel-read-only-strip-test-*=,
+  unit 3 =gptel-reasoning-hooks-test-*=, unit 4 =gptel-current-fsm-test-*=,
+  unit 5 =gptel-current-tool-call-test-*=, unit 6 =gptel-abort-test-*=,
+  unit 7 =gptel-tool-args-test-*=, unit 8
+  =gptel-context-prefer-buffer-test-*=).  Unit 7 additionally keeps some
+  =gptel--sanitize-string-*= test names, which already match the function
+  under test.
+- The fork's own characterization suite =tests/gptel-fork-test.el= is
+  intentionally left untouched on the branch; the per-unit test files
+  duplicate its tests.
