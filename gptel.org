@@ -23,6 +23,150 @@
   a detached HEAD at the recorded pointer commit there is normal.
 * Future plans
 * TODOs
+** AI-DO Update gptel from upstream and plan fork retirement
+*** Origin
+urho — request "Update gptel to latest version from origin"; the goal
+is to get rid of the gptel fork so gptel can be updated easily.
+*** Current state (measured on feature/gptel-callback-migration)
+- =orga= is 73 commits ahead / 38 behind =origin/master=
+  (merge-base =6bb7a6f= 2026-06-14; upstream tip =fc69636=
+  "gptel-org: Support GPTEL_PRESET property" 2026-08-04).
+- =feature/gptel-callback-migration= = =orga= + 3 commits
+  (=dab5f74= wire-id callback delivery, =c6a46e5= / =cfc07b9=
+  reverts of fork-only hook commits).
+- Trial merge of =origin/master= into =orga= (temp worktree,
+  aborted): 4 content conflicts, one hunk each — =NEWS=,
+  =gptel-anthropic.el=, =gptel-org.el=, =gptel-request.el= — plus
+  the =test= submodule pointer.
+- Post-callback-migration fork surface (what still forces the fork):
+  - KEPT per divergence ledger: =387a94d= (tool-call plist in
+    pending confirmations), =dab5f74= (wire-id in :callback tool
+    delivery), =b74449a= (gptel-abort REASON/CAUSE), =67090c1=
+    (kill tool subprocesses on abort), =116b15f=
+    (=gptel--current-fsm= binding).
+  - Not yet in the ledger: =4d094f7= (=gptel--current-tool-call=),
+    =e8fb320= (pre-tool hook error propagation), =279e9aa= (empty
+    reasoning suppression), =7b5fce6= (tool-result sanitization),
+    =3fd6d68= (=gptel-tool= org-output slot), =004ba1a=
+    (gptel-tool src blocks), model additions, and several reverts
+    of upstream features (adaptive thinking, sentence boundary).
+*** Options
+- Phase A — update now (routine, low risk):
+  Merge =origin/master= into the feature branch (one-way, per the
+  documented fork strategy), resolve the 4 single-hunk conflicts +
+  submodule pointer, run the test suite.  Upstream brings in native
+  GPTEL_PRESET org support, which likely supersedes our =AI-DONE
+  Apply GPTEL_PRESET...= change (the =gptel-org.el= conflict).
+- Phase B — fork retirement (needs per-commit decisions):
+  For each remaining fork commit choose one of:
+  1. Upstream it — open a PR to karthink/gptel (best candidates:
+     =7b5fce6= tool-result sanitization, =67090c1= subprocess kill
+    on abort, =279e9aa= empty-reasoning suppression — all generic
+    bug fixes/robustness).
+  2. Reimplement in siro-orga on top of vanilla gptel where the
+     public =gptel-request= contract allows it.
+  3. Drop it if superseded by upstream or no longer consumed.
+  End state: =orga= == =origin/master=, gptel installed as a plain
+  upstream checkout; siro-orga carries all behaviour via the
+  =gptel-request= callback API.
+- Recommended: do Phase A immediately; treat Phase B as a
+  follow-up TODO with a per-commit decision table for user review.
+**** FEEDBACK Drop all fork commits and use vanilla gptel
+We will reimplement the features later as we need
+**** AI-FEEDBACK Dropping the fork is viable, but only with a siro-orga-side compatibility shim
+A dependency inventory across =~/siro-orga= and =~/gptel-agent= was
+run before acting.  A naive "drop all fork commits" breaks the
+workspace: siro-orga consumes 73 distinct private =gptel--= symbols
+across ~600 call sites, and six of them exist ONLY in the fork.
+
+***** Hard fork-only dependencies (break immediately on vanilla)
+- =gptel--current-fsm= (=116b15f=) — dynamic binding around hook /
+  FSM dispatch.  ~20 production sites in =siro-gptel-hooks.el= and
+  =siro-orga-send.el=; the whole hooks layer locates the current
+  request's FSM through it.  Hardest single dependency.
+- =gptel--current-tool-call= (=4d094f7=) — 6 production sites;
+  required by the subagent-launch wire-id resolution at
+  =siro-orga-send.el:1250=.
+- Wire-id tool-call plist keys =:id= / =:name= / =:args=
+  (=387a94d= + =dab5f74=) — the entire per-wire-id tool routing
+  (tool IBs, pending-tool registry, segment tracking) is keyed on
+  these.  ~98 references.
+- =gptel-tool= =org-output= slot (=3fd6d68=) — a struct slot, so
+  unreachable by advice.  ~15 production sites plus a dedicated
+  test suite at =test/siro-gptel-hooks-test.el:3130=.
+- =gptel-abort= REASON / CAUSE (=b74449a=) — 5 sites in siro-orga,
+  2 in =gptel-agent-tools.el:1554=.
+- =gptel--sanitize-string= (=7b5fce6=) — used by the gptel-agent
+  Eval tool (=gptel-agent-tools.el:1693,1698=).
+
+***** Genuinely droppable now (zero production consumers)
+- =e8fb320= pre-tool hook error propagation — doc mention only.
+- Fork-only hooks =gptel-{pre,post}-{tool-call,reasoning}-hook= —
+  already reverted; production code uses the upstream
+  =...-functions= abnormal hooks instead.
+- =004ba1a= gptel-tool src blocks — the =#+begin_src gptel-tool=
+  convention is implemented entirely inside siro-orga
+  (=siro-gptel-headings.el:1521=), no fork API consumed.
+- =279e9aa= empty-reasoning suppression — one test depends on it;
+  siro-orga already has a partial workaround.
+
+***** Recommended reading of the feedback
+"Reimplement the features later as we need" is exactly a
+*compatibility shim in siro-orga*: gptel becomes a plain upstream
+checkout with zero patches, and siro-orga carries the six missing
+behaviours as advice + let-bindings around the public
+=gptel-request= contract.  Concretely:
+- =gptel--current-fsm= / =gptel--current-tool-call= → defvar them
+  in siro-orga and let-bind them from =:around= advice on the
+  gptel FSM handlers.
+- Wire-id plist keys → recover the id from the backend tool-call
+  data inside advice on =gptel--handle-tool-use=.
+- =org-output= slot → replace with a siro-orga-side registry
+  (tool name → org-output flag) instead of a struct slot.
+- =gptel-abort= REASON/CAUSE → =:around= advice storing the
+  reason/cause in siro's own state before delegating.
+- =gptel--sanitize-string= → move the function into gptel-agent.
+This delivers the user's goal (no fork, easy upstream updates)
+without a flag-day breakage, and each shim can later be replaced
+by an upstream PR.
+
+***** Status of Phase A
+Phase A is already DONE locally: =bc5a2ea= merges upstream
+=fc69636= into =feature/gptel-callback-migration= (17 files, +743
+/ -405), working tree clean.  It was unpushed; the earlier
+=pull --rebase= "conflict" was only rebase trying to flatten that
+merge commit, and it aborted without loss.  If the fork is retired
+this merge becomes moot, but it is harmless and is pushed as-is.
+
+***** Open decision for the user
+- Option 1 — /shim now/ (recommended): reset =orga= to
+  =origin/master=, install vanilla gptel, land the six shims in
+  siro-orga in one feature branch, keep the existing test suite
+  green as the acceptance gate.
+- Option 2 — /upstream first/: open PRs to karthink/gptel for the
+  three clean generic candidates (=7b5fce6= sanitization,
+  =67090c1= subprocess kill on abort, =b74449a= abort
+  REASON/CAUSE), shim only the rest.  Slower, but ends with a
+  smaller shim.
+- Option 3 — /hard drop/ (as literally stated in the feedback):
+  reset to vanilla immediately and accept that siro-orga tool
+  routing, subagent launch, and org-output handling are broken
+  until reimplemented.  Not recommended — no incremental path and
+  no green test suite in between.
+*** Mission
+Bring the fork up to date with upstream now, and produce the
+per-commit retirement plan that ends with no fork at all.
+*** TODOs
+**** AI-DONE Phase A: merge origin/master into feature branch and resolve conflicts
+**** AI-DO Phase B: build per-commit fork-retirement decision table for user review
+*** Outcomes / Results
+- Phase A complete: =bc5a2ea= merges upstream =fc69636= into
+  =feature/gptel-callback-migration= (17 files, +743 / -405).
+  Conflicts in =NEWS=, =gptel-anthropic.el=, =gptel-org.el=,
+  =gptel-request.el= and the =test= submodule pointer were
+  resolved in that commit.
+- Phase B superseded by the =AI-FEEDBACK= analysis above: the
+  per-commit decision table is replaced by the six-item shim plan.
 ** AI-DONE Prefer modified visiting buffer over disk in file-based context
 CLOSED: in commit 8a72b7f on branch orga
 *** Origin
@@ -1432,7 +1576,7 @@ just typed.  Preserve =word= as an opt-in for evil-mode users and add
 | =gptel--at-word-end= macro           | =~/gptel/gptel-request.el::1037= |
 | Evil-mode workaround comment         | =~/gptel/gptel-request.el::2188= |
 | Org-mode prompt path                 | =~/gptel/gptel-org.el::226=      |
-** AI-DONE Support Anthropic adaptive thinking effort (thinking + output_config)
+*q* AI-DONE Support Anthropic adaptive thinking effort (thinking + output_config)
 *** Origin
 - Requested in siro-orga discussion (urho): plan how to implement
   Anthropic "thinking effort".  Constraints given:
@@ -1625,7 +1769,7 @@ the siro-orga workspace discussion (user urho).
   filter in =gptel-request.el= (~L3082) guards only with
   =(stringp reasoning)=, and =(stringp "")= is =t=, so a
   =(reasoning . "")= callback fires and
-  =gptel-pre-reasoning-hook= creates the heading.  If no thinking
+  the reasoning heading is created.  If no thinking
   deltas ever arrive (empty thinking block, e.g. tool-use rounds),
   the =content_block_stop= → =(reasoning . t)= callback closes the
   segment as =REASONED= with an empty body.
@@ -1915,6 +2059,15 @@ tracked; late sentinel after abort does not corrupt FSM state.
   thin, shrinking =siro-gptel-compat.el= shim in =~/siro-orga= that
   provides only seams not yet accepted upstream.  The fork is retired
   when the shim is empty or purely additive.
+- Decision D4 (user, Q1): Phase 3 uses MERGE (=git merge origin/master=
+  into the fork branch), not rebase.
+- Decision D5 (user, Q2): end-state is a minimal PERMANENT fork of
+  seam-only patches (option b).  Upstream PRs may still be submitted
+  opportunistically; each seam is tracked as a PR unit in
+  [[file:../siro-orga/siro-orga.org::*Submit gptel seam patches upstream (karthink/gptel)][Submit gptel seam patches upstream (karthink/gptel)]].
+- Decision D6 (user, Q3): the =org-output= slot becomes a generic
+  properties mechanism kept in the permanent fork; propose upstream
+  later as a generic =:properties= plist slot on =gptel-tool=.
 *** Open questions for the user
 - Q1: Rebase or merge for Phase 3?  Options:
   (a) =git rebase --onto origin/master <merge-base> orga= — linear
@@ -1941,6 +2094,11 @@ tracked; late sentinel after abort does not corrupt FSM state.
 2. b
 3. generic properties in the permanent fork
 Make a todo into [[file:../siro-orga/siro-orga.org::*TODOs future plans][TODOs future plans]] with a sub todo for each patch so in the future we can submit PR upstream 
+**** AI-FEEDBACK Decisions D4-D6 recorded; PR-tracking TODO created in siro-orga.org
+- Q1 → merge (D4), Q2 → permanent minimal fork with opportunistic PRs
+  (D5), Q3 → generic properties slot (D6); recorded under =Decisions=.
+- Per-seam PR tracking TODO created in siro-orga.org under =TODOs
+  future plans=: one sub-TODO per patch unit (9 units), see link in D5.
 *** Mission
 Bring the =orga= fork up to date with upstream =karthink/gptel=, and
 reduce the fork to a set of generic, upstreamable seams so that
@@ -1950,14 +2108,14 @@ Siroic-specific fork debt, then absorb upstream, then upstream the
 seams, then retire.
 *** TODOs
 **** Phase 0 — Regression net (do this first, no behaviour change)
-***** AI-DO Establish a green test baseline on =orga=
+***** AI-DONE Establish a green test baseline on =orga=
 - Run the existing suite (=tests/gptel-request-test.el=, plus the
   =test/= harness if present) and record the exact pass/fail baseline in
   this TODO's =Outcomes= section.
 - Enable =debug-on-error= in batch runs so failures produce backtraces.
 - Blocking for every later phase: without a recorded baseline we cannot
   distinguish upstream breakage from our own.
-***** AI-DO Add characterization tests for each fork feature
+***** AI-DONE Add characterization tests for each fork feature
 - One test per feature listed under "The 73 commits reduce to ~10
   features", asserting current observable behaviour:
   =gptel--sanitize-string= on raw bytes; =gptel--validate-tool-args=
@@ -1970,8 +2128,10 @@ seams, then retire.
   read-only text properties stripped in =gptel--with-buffer-copy=.
 - Include error-path tests, not only happy paths.
 - These tests are the acceptance criteria for Phases 2 and 3.
+- Done: =tests/gptel-fork-test.el=, 17 batch-safe ERT tests covering all
+  listed features incl. error paths.  Committed as =90863d0=.
 **** Phase 1 — Inventory freeze (documentation only)
-***** AI-DO Record a per-commit disposition table for all 73 commits
+***** AI-DONE Record a per-commit disposition table for all 73 commits
 - For each commit in =git log --oneline --no-merges origin/master..orga=
   assign exactly one disposition: =UPSTREAM= (generic seam to submit),
   =MOVE-TO-SIRO= (Siroic-specific, relocate to =~/siro-orga=), =DROP=
@@ -1980,22 +2140,132 @@ seams, then retire.
 - Store the table in =gptel.org= under this TODO so it survives the
   session and other users can review it.
 - Flag any commit that cannot be classified — those are the real risk.
+****** Disposition table (baseline: orga @ d7d2f1b, 70 non-merge commits vs origin/master)
+- Summary: UPSTREAM 20, MOVE-TO-SIRO 5, TAKE-UPSTREAM 3, DROP 42, UNCLEAR 0.
+- Borderline commits to re-check during Phase 2/3: =387a94d= (UPSTREAM,
+  becomes DROP if siro-orga bypasses gptel's pending-calls confirmation
+  path), =39fa510= (DROP, reclassify UPSTREAM if submodule pointer
+  =bbed19f= holds tests for a kept seam), =2284e84=/=506b3d5= (UPSTREAM
+  gap-fills, become DROP if upstream deliberately omits claude-opus-5
+  from anthropic/bedrock backends).
+- Non-obvious calls: =9140658=, =cc2a806=, =fb09ef5= are UPSTREAM (not
+  MOVE-TO-SIRO) — upstream tip still lacks these generic FSM fixes.
+  =ea0b127=/=12db56a= are TAKE-UPSTREAM — upstream already ships
+  claude-sonnet-5.
+
+| hash | subject | disposition | note |
+|---------+--------------------------------------------------------------+---------------+------------------------------------------------|
+| d7d2f1b | gptel.org: record user feedback on fork-retirement TODO | DROP | doc only |
+| 64cc17c | Add AI-DO: update gptel from upstream, plan fork retirement | DROP | doc only |
+| a197d1e | Document test submodule push/pull | DROP | doc only |
+| 2bfe095 | Mark sanitize-tool-result TODO AI-DONE | DROP | doc bookkeeping |
+| 7b5fce6 | Sanitize tool-result strings before JSON serialization | UPSTREAM | gptel--sanitize-string seam |
+| f075a7a | Add AI-DO: sanitize tool-result strings | DROP | doc bookkeeping |
+| 67090c1 | Kill in-flight tool subprocesses on gptel-abort | UPSTREAM | gptel--kill-tool-processes seam |
+| 2c11ee1 | Add AI-DO: kill in-flight tool subprocesses | DROP | doc bookkeeping |
+| 875e39e | updated task | DROP | doc only |
+| b5f5ef7 | gptel.org: close 'Suppress empty reasoning headings' | DROP | doc bookkeeping |
+| 279e9aa | gptel-anthropic: suppress empty reasoning blocks | UPSTREAM | empty-reasoning guard |
+| 524255c | docs: add AI-DO to suppress empty reasoning headings | DROP | doc bookkeeping |
+| 3fd6d68 | gptel-tool: add org-output slot | MOVE-TO-SIRO | org-output slot (→ generic :properties, D6) |
+| 506b3d5 | Add claude-opus-5 to Bedrock model map; update NEWS | UPSTREAM | gap-fill; NEWS hunk may collide on merge |
+| 2284e84 | Add claude-opus-5 to Anthropic known models | UPSTREAM | gap-fill |
+| e8fb320 | Propagate pre-tool hook errors in gptel--handle-pre-tool | MOVE-TO-SIRO | pre-tool hook error propagation |
+| 4d094f7 | Add gptel--current-tool-call dynamic var | UPSTREAM | gptel--current-tool-call seam |
+| b74449a | gptel-abort: accept optional REASON and CAUSE | UPSTREAM | abort REASON/CAUSE seam |
+| 9140658 | fix(fsm): pass gptel-send--transitions table at menu/rewrite | UPSTREAM | generic fix; upstream tip still lacks :table |
+| 387a94d | gptel-request: tool-call plist in pending confirmations | UPSTREAM | borderline; see notes above |
+| 4017d57 | Reverted adaptive thinking for sonnet-5 | DROP | reverted work |
+| 39fa510 | changed commit hash | DROP | submodule pointer; borderline, see notes |
+| 2be0324 | Revert adaptive thinking-effort | DROP | revert of 3fc204f |
+| 6e58e53 | docs: AI-DO capability-gating Anthropic effort | DROP | doc bookkeeping |
+| ea0b127 | feat(anthropic): add claude-sonnet-5 | TAKE-UPSTREAM | upstream already has claude-sonnet-5 |
+| 12db56a | feat(anthropic): add claude-sonnet-5 | TAKE-UPSTREAM | duplicate sibling of ea0b127 |
+| 4f77c69 | docs(ai): thinking-effort TODO AI-DONE | DROP | doc bookkeeping |
+| 3fc204f | feat(anthropic): gptel-thinking-effort adaptive thinking | DROP | reverted by 2be0324 |
+| f60c661 | docs(ai): record decisions on thinking-effort TODO | DROP | doc bookkeeping |
+| 9b55bde | docs(ai): plan TODO for adaptive thinking effort | DROP | doc bookkeeping |
+| 004ba1a | Output begin_src gptel-tool blocks instead of begin_tool | MOVE-TO-SIRO | tool-result block formatting |
+| fb09ef5 | fix(fsm): guard post-response hooks against nil markers | UPSTREAM | generic nil-marker fix |
+| 6dfcd7e | test(fsm): bump test submodule for current-fsm tests | UPSTREAM | tests for current-fsm seam |
+| 116b15f | feat(fsm): bind gptel--current-fsm around handlers | UPSTREAM | current-fsm + gptel-current-info seam |
+| c37190b | Revert prompt-boundary configurable | DROP | revert |
+| d8d876c | Revert docs follow-up AI-DO sentence boundary | DROP | revert of doc |
+| 8bfbd41 | docs: gptel-org.el conflict-resolution TODO AI-DONE | DROP | doc bookkeeping |
+| 02078ff | Fix incorrect org formatting | DROP | doc only |
+| 0bb94d3 | docs: TODO to resolve gptel-org.el merge conflict | DROP | doc bookkeeping |
+| 85e0f55 | docs: follow-up AI-DO sentence boundary failure | DROP | doc; reverted |
+| 5d63a4d | feat(gptel-request): prompt boundary configurable (re-apply) | DROP | reverted by c37190b |
+| 4324642 | Revert prompt-boundary configurable (first) | DROP | revert |
+| d1fcacc | feat(gptel-request): prompt boundary configurable | DROP | reverted by 4324642 |
+| 3ac268c | docs: AI-DO make prompt boundary configurable | DROP | doc bookkeeping |
+| a3fb401 | docs: buffer-preference TODO done, test-infra follow-up | DROP | doc bookkeeping |
+| 8a72b7f | feat(context): prefer live visiting buffer over disk | UPSTREAM | gptel-context-prefer-buffer seam |
+| a7f1993 | docs: AI-DO buffer-preferring file context | DROP | doc bookkeeping |
+| c1b0385 | gptel.org: AI-DONE reasoning storage to REASONED headings | DROP | doc bookkeeping |
+| 1956b29 | gptel: drop reasoning fences and 'ignore prop for org-mode | MOVE-TO-SIRO | org REASONED reasoning path |
+| 2827523 | gptel.org: parse-the-live-org-buffer TODO -> AI-DONE | DROP | doc bookkeeping |
+| f18959e | Add task | DROP | doc only |
+| a70b9a9 | org: mark tool-call TODO-state phase AI-DONE | DROP | doc bookkeeping |
+| e6ccb83 | hooks: expose tool-call :id in pre/post-tool-call plists | UPSTREAM | :id in hook plists seam |
+| 140034a | gptel.org: mark lineage walker AI-DONE | DROP | doc bookkeeping |
+| afb8ef8 | gptel.org: mark Phase 3 AI-DONE | DROP | doc bookkeeping |
+| 253d22b | gptel.org: mark Phase 2 AI-DONE | DROP | doc bookkeeping |
+| e44adde | gptel.org: Mark Phase 1 sub-AI-DOs DONE | DROP | doc bookkeeping |
+| adadf91 | gptel.org: follow-up AI-DOs IB producer side | DROP | doc bookkeeping |
+| 0206ffc | docs(tool-calls): correlation-ID decision | DROP | doc bookkeeping |
+| 5b3b48b | gptel.org: resolve FEEDBACK on buffer-copy TODO | DROP | doc bookkeeping |
+| cc2a806 | gptel-request: record gptel--fsm-last on ABRT | UPSTREAM | generic; mirrors DONE/ERRS rows |
+| 320b629 | gptel: Add gptel-{pre,post}-reasoning-hook | UPSTREAM | reasoning hooks seam |
+| e4ac714 | gptel-org: Drop GPTEL_BOUNDS property persistence | MOVE-TO-SIRO | GPTEL_BOUNDS removal |
+| caf3f26 | gptel-request: Validate required tool-call args | UPSTREAM | gptel--validate-tool-args seam |
+| a1500c6 | gptel-org: Move read-only strip inside branching loop | UPSTREAM | read-only stripping refinement |
+| d8ba9c7 | gptel-org: Strip read-only props in branching-context | UPSTREAM | read-only stripping seam |
+| aa94b04 | gptel-request: Strip read-only props from copied buffer | UPSTREAM | read-only stripping seam |
+| d3e80d2 | gptel.org: GPTEL_PRESET send-with-props TODO | DROP | doc bookkeeping |
+| bf867c3 | gptel-org: Honor GPTEL_PRESET in send-with-props | TAKE-UPSTREAM | upstream fc69636 supersedes |
+| 16c8f72 | Add project doc stub | DROP | doc stub |
 **** Phase 2 — Shrink the fork (before touching upstream)
-***** AI-DO Delete our GPTEL_PRESET implementation in =gptel-org--send-with-props=
+***** AI-DONE Delete our GPTEL_PRESET implementation in =gptel-org--send-with-props=
 - Revert our =bf867c3= / =d3e80d2= changes so the function returns to
   its merge-base shape; upstream's =fc69636= mechanism will supply the
   feature in Phase 3.
 - Verify org-entry > preset > default priority still holds after Phase 3
   using upstream's =gptel-org--presets= path; add a test if absent.
 - Removes the single highest-severity conflict.
-***** AI-DO Move tool-result block formatting out of gptel into siro-orga
+- Done: function restored to exact merge-base (6bb7a6f) shape.  Commit =321ab82=.
+***** AI-DONE Move tool-result block formatting out of gptel into siro-orga
 - Restore =gptel--display-tool-results= to upstream shape.
 - Reimplement =#+begin_src gptel-tool= delimiters siro-side (a
   =gptel-post-response-functions= entry or the existing siro insertion
   path), keeping =gptel-org--strip-block-headers= /
   =gptel-org--unescape-tool-results= behaviour consistent.
 - Removes the second highest-severity conflict.
-***** AI-DO Move the org REASONED reasoning path out of gptel into siro-orga
+- Done: =gptel--display-tool-results= restored to upstream =#+begin_tool=
+  delimiters (=11ebaaf=); =gptel-org--strip-block-headers= /
+  =gptel-org--unescape-tool-results= restored to merge-base bodies.
+- No siro-side reimplementation was needed: on
+  =feature/gptel-callback-migration= every siro request supplies
+  =:callback #'siro-orga--callback=, which renders tool results itself
+  (=siro-gptel-hooks--deliver-tool-result= → =--write-tool-result-at=),
+  so gptel's display path is unreachable for siro requests.
+- Phase 3 audit item: verify no siro flow still routes org buffers
+  containing =#+begin_src gptel-tool= history blocks through
+  =gptel-org--create-prompt= (whose block-stripping now expects
+  upstream =#+begin_tool= delimiters).
+- Audit result (2026-08-11): NO LEAK.  The main-turn path uses the
+  =siro-orga-send--prompt= transform, which ERASES gptel's org-parsed
+  prompt buffer and rebuilds it with siro's own walker; that walker
+  correctly unwraps =#+begin_src gptel-tool= blocks
+  (=siro-gptel-headings-unwrap-tool-block=,
+  siro-gptel-headings.el:1532).  The sub-agent path passes an explicit
+  string PROMPT, so =gptel-org--create-prompt-buffer= is never reached
+  (gptel-request.el:2344, =stringp= branch).  No remediation needed.
+  Edge case noted and accepted (not a siro-orga flow): a user manually
+  running =M-x gptel-send= in a siro chat buffer gets vanilla
+  transforms, and old =#+begin_src gptel-tool= history blocks would not
+  be stripped.
+***** AI-DONE Move the org REASONED reasoning path out of gptel into siro-orga
 - Keep ONLY the generic =gptel-pre-reasoning-hook= /
   =gptel-post-reasoning-hook= additions in gptel; restore
   =gptel--display-reasoning= and =gptel--display-reasoning-stream= to
@@ -2004,7 +2274,13 @@ seams, then retire.
   entirely in =siro-gptel-hooks.el= via those hooks.
 - This is the largest body-modification in the fork; removing it is what
   makes retirement plausible.
-***** AI-DO Relocate the remaining Siroic-specific edits
+- Done: =gptel--display-reasoning= / =-stream= restored to upstream
+  fence-based bodies; only the generic =gptel-pre/post-reasoning-hook=
+  seam remains (=11ebaaf=).
+- No siro-side reimplementation was needed: the callback dispatcher
+  (=siro-orga-send--on-reasoning=) renders REASONING/REASONED heading
+  segments itself and does not use the reasoning hooks.
+***** AI-DONE Relocate the remaining Siroic-specific edits
 - =org-output= slot on =gptel-tool= → siro-side (see Q3).
 - =GPTEL_BOUNDS= removal in =gptel-org--save-state= /
   =--restore-state= → restore upstream behaviour; siro ignores the
@@ -2013,14 +2289,34 @@ seams, then retire.
   whether to propose upstream (removing =with-demoted-errors= is
   arguably a genuine bugfix per our hard-error policy) or handle
   siro-side.
-***** AI-DO Re-run the Phase 0 test net and confirm no regression
+- =org-output= slot → replaced per D6 with a generic =properties= plist
+  slot on =gptel-tool= (=(properties nil :type list)=, e.g.
+  =:properties '(:org-output t)=).  Landed on =orga= branch; the
+  =org-output= slot is removed (no compat shim).
+- siro-orga migration COMPLETE: all sites use
+  =:properties '(:org-output t)= / =(plist-get (gptel-tool-properties
+  spec) :org-output)=; no =gptel-tool-org-output= accessor references
+  remain.  Sites: =siro-agent-tools-org.el:411,445,479=,
+  =siro-orga-send.el:1441=, =siro-gptel-hooks.el:3568= (+ tests).
+- =GPTEL_BOUNDS= save/restore → restored upstream behaviour verbatim;
+  grep confirms =~/siro-orga= never references GPTEL_BOUNDS, so siro
+  simply ignores the property.
+- Pre-tool hook error propagation (=with-demoted-errors= removal in
+  =gptel--handle-pre-tool=): DECIDED to keep as an UPSTREAM seam and
+  propose it as a bugfix PR — silently demoting pre-tool hook errors
+  hides genuine failures (hard-error policy).
+***** AI-DONE Re-run the Phase 0 test net and confirm no regression
 - The characterization tests must still pass after every relocation.
 - Any failure here is a relocation bug, not an upstream problem — fix it
   before Phase 3.
+- Done: after all Phase 2 relocations, 11/11 =gptel-request-test.el=
+  and 17/17 =gptel-fork-test.el= pass; byte-compile clean (no new
+  warnings).
 **** Phase 3 — Absorb upstream
-***** AI-DO Decide rebase vs merge and record the decision
+***** AI-DONE Decide rebase vs merge and record the decision
 - See Q1.  Needs user input; do not proceed on a guess.
-***** AI-DO Absorb the 38 upstream commits and resolve the known conflicts
+- Decided by user feedback: MERGE (Decision D4).
+***** AI-DONE Absorb the 38 upstream commits and resolve the known conflicts
 - Expected remaining conflicts after Phase 2, in order:
   =gptel-request.el= vs the curl stdin/=--config= overhaul (=cb0552a=,
   =9ff70ce=) around =gptel--current-fsm= bindings;
@@ -2031,11 +2327,26 @@ seams, then retire.
   function, should auto-merge).
 - Absorb upstream's obsoletion of =gptel-curl-file-size-threshold= and
   check nothing in =~/siro-orga= references it.
-***** AI-DO Verify against upstream's new curl request path
+- Done: merge commit =616b5dc= ("Merge upstream origin/master into
+  feature/fork-retirement (Phase 3)") on =feature/fork-retirement=.
+- Post-merge verification: 28/28 tests pass (11/11
+  =gptel-request-test.el=, 17/17 =gptel-fork-test.el=); byte-compile
+  clean (6 pre-existing warnings, no errors).
+- =gptel-curl-file-size-threshold= still exists upstream (marked
+  obsolete); =~/siro-orga= has zero references — no action needed.
+***** AI-DONE Verify against upstream's new curl request path
 - Upstream now sends the payload via stdin + =--config=.  Re-run the
   full test net plus a live smoke test of streaming, tool calls, abort,
   and reasoning, since our FSM bindings sit in the refactored code.
-***** AI-DO Audit =~/siro-orga= against the updated gptel
+- Done (batch): full test net green post-merge; curl stdin +
+  =--config= path present (=gptel-request.el:3015=); our
+  =gptel--current-fsm= bindings survive in the refactored
+  response/stream handlers (=gptel-request.el:2832,3113,3189=).
+- REMAINING: live interactive smoke test (streaming, tool calls,
+  abort, reasoning) must run in a =SIRO_DEV=1= dev session — the
+  stable AI session cannot load feature-branch code.  Deferred to the
+  user / a dev-session run before Phase 5's retirement gate.
+***** AI-DONE Audit =~/siro-orga= against the updated gptel
 - Grep =~/siro-orga= for every gptel internal it references
   (=declare-function= list in =siro-gptel-hooks.el=, =gptel--fsm-transition=,
   =gptel--validate-tool-args=, =gptel--map-tool-args=, =gptel--to-string=,
@@ -2044,8 +2355,21 @@ seams, then retire.
 - Fix any drift in =~/siro-orga= in the same task; update
   [[file:../siro-orga/siro-orga.org::*Design patterns][Design patterns]] if a
   pattern changes.
+- Done: all 16 referenced gptel internals exist with
+  signature-compatible definitions (declare-function list in
+  =siro-gptel-hooks.el= matches exactly; =gptel-abort= 1/3-arg call
+  sites fit =(buf &optional reason cause)=).
+- The org-output→properties migration flagged under Phase 2 is
+  COMPLETE: the =properties= slot has landed on the =orga= branch
+  (=:properties '(:org-output t)=, read with =(plist-get
+  (gptel-tool-properties spec) :org-output)=) and all siro-orga sites
+  are migrated; no =gptel-tool-org-output= accessor references remain.
+- FSM reuse intact: =gptel-send--transitions= / =gptel-send--handlers=
+  (=gptel.el:1274,1290=) and the =gptel-fsm= struct
+  (=gptel-request.el:1884=) match siro-orga's usage.
+- No drift found; no siro-orga fixes required.
 **** Phase 4 — Upstream the seams
-***** AI-DO Split the seam patches into independent, upstreamable units
+***** AI-DONE Split the seam patches into independent, upstreamable units
 - One unit per seam, each self-contained with tests and a rationale:
   (1) =gptel-pre-reasoning-hook= / =gptel-post-reasoning-hook=;
   (2) =gptel--current-fsm= + =gptel-current-info=;
@@ -2057,10 +2381,37 @@ seams, then retire.
   (8) read-only text-property stripping.
 - Order by independence: (7) and (8) are pure bugfixes and should go
   first; (1)–(3) are the ones siro-orga actually blocks on.
+- Done: 12 patch units in =patches/= (=0001-anthropic-empty-reasoning-guard=
+  … =0012-claude-opus-5-models=), each a =git am=-able format-patch file
+  written against vanilla =origin/master= and verified =git apply
+  --check=-clean there; units 1–8 embed their own standalone ERT test
+  file (28 tests total, each unit's tests green with only that unit
+  applied to vanilla), units 9–12 state why they carry no test.
+  =patches/README.org= documents per-unit rationale, files touched, the
+  known mutual conflicts (5↔10 on the pre-tool hook form, 6↔7 and
+  5↔6↔7 in the tool-use/tool-result paths), and the two unassigned
+  =gptel-rewrite.el= / =gptel-transient.el= FSM =:table= hunks left for
+  a future unit 0013.
 ***** AI-DO Submit upstream and track acceptance
 - Depends on Q2.  Record per-unit status (submitted / merged /
   rejected) in =Outcomes= so the retirement gate is auditable.
+- Blocker resolved (2026-08-11): the =gptel-fork-*= test-prefix issue is
+  fixed — all 13 patches now carry per-unit test prefixes (e.g.
+  =gptel-abort-test-=, =gptel-tool-args-test-=), documented in the
+  prefix table in =patches/README.org=.  Commit =a3c2e68= on
+  =feature/fork-retirement=.
+- Submission is currently blocked on tooling: the GitHub CLI (=gh=) is
+  NOT installed on this machine, so opening the PRs requires user
+  action — either the GitHub web UI or installing =gh= first.
+- Per Decision D5 submission is opportunistic (the permanent minimal
+  fork is the accepted end-state); per-unit submitted / merged /
+  rejected status is tracked in the siro-orga.org PR-tracking TODO.
 **** Phase 5 — Retire the fork
+Per Decision D5 the end-state is a PERMANENT MINIMAL FORK, so the
+vanilla-switch sub-tasks below apply only if/when all seam units are
+actually merged upstream.  Until that happens Phase 5 is dormant: the
+fork is maintained by periodically merging upstream into the fork
+branch, and no retirement gate is attempted.
 ***** AI-DO Introduce =siro-gptel-compat.el= as the shrinking shim
 - Provides ONLY the seams not yet accepted upstream, additively (new
   defvars/hooks), never by redefining or advising gptel functions.
@@ -2079,7 +2430,158 @@ seams, then retire.
   vanilla-upstream setup.
 - Keep the deprecated-fork archaeology note: fork history remains the
   record of why each seam exists.
+*** Important notes
+- =git pull --rebase= on =feature/fork-retirement= FLATTENS the Phase 3
+  merge commit and replays the 38 upstream commits, producing spurious
+  conflicts (observed at =def96c7=, NEWS + gptel-anthropic.el).  While
+  this branch carries the merge and the mirrors are behind, sync it by
+  PLAIN PUSH only; if a pull is ever needed, use
+  =git pull --no-rebase= or =--rebase=merges=.
 *** Outcomes / Results
-- Not started.  Fill in per-phase results, the Phase 0 test baseline,
-  the Phase 1 disposition table, and the Phase 4 per-unit upstream
+- Phase 0 baseline (2026-08-11, branch =feature/fork-retirement= off
+  =orga= @ =d7d2f1b=): 11/11 tests pass in =tests/gptel-request-test.el=
+  (all =gptel--sanitize-string= variants), 0 failures.  Command:
+  =emacs -Q -batch -L . -L ~/.emacs.d/elpa/compat-31.0.0.2 --eval "(setq debug-on-error t)" -l ert -l tests/gptel-request-test.el -f ert-run-tests-batch-and-exit=.
+- Phase 1 disposition table recorded (see Phase 1 sub-task): 70
+  commits — UPSTREAM 20, MOVE-TO-SIRO 5, TAKE-UPSTREAM 3, DROP 42.
+- Work branch: =feature/fork-retirement= in =~/gptel=.
+- PR-tracking TODO created in siro-orga.org (=TODOs future plans= →
+  =Submit gptel seam patches upstream (karthink/gptel)=), commit
+  =eb49633= on =feature/gptel-callback-migration=.
+  Fill in per-phase results and the Phase 4 per-unit upstream
   status here as work proceeds.
+- Phase 2 complete (2026-08-12, by urho's session): fork shrunk to
+  generic seams only.  Commits =90863d0= (Phase 0 tests), =321ab82=
+  (GPTEL_PRESET revert), =11ebaaf= (reasoning + tool-result display
+  revert), plus GPTEL_BOUNDS/strip-block-headers restore and
+  org-output→properties slot generalization.  Remaining fork diff vs
+  merge-base is now: seam defcustoms/vars/hooks, FSM guards,
+  validate/sanitize/kill-processes, read-only stripping, claude-opus-5
+  model entries, pre-tool error propagation, and the generic
+  =properties= tool slot.
+- Phase 3 complete (2026-08-11, by urho's session): upstream merged as
+  =616b5dc=; 28/28 tests green; byte-compile clean; siro-orga audit
+  found zero drift (org-output→properties migration already done
+  siro-side).  Live interactive smoke test still pending in a dev
+  session.
+- Phase 4 split complete (2026-08-12, by urho's session): 12
+  independent upstreamable units in =patches/=, all =git apply
+  --check=-clean against =origin/master=, per-unit tests embedded (28
+  tests, green per-unit on vanilla), =patches/README.org= with
+  rationale and conflict notes.
+- Session update (2026-08-11, by urho's session): (a) the Phase 3 audit
+  item is CLOSED with verdict NO LEAK — siro's main-turn transform
+  erases gptel's org parse and siro's walker unwraps gptel-tool blocks,
+  and the sub-agent path passes a string PROMPT so org is never parsed;
+  only a manual =M-x gptel-send= in a siro chat buffer is affected, which
+  is accepted.  (b) Per-unit test prefixes renamed across all 13 patches
+  (=a3c2e68=), replacing =gptel-fork-*=; 13/13 =git apply --check= clean
+  against vanilla =origin/master= and 28/28 embedded tests green
+  per-unit.  (c) Phase 4 submission is blocked on =gh= not being
+  installed here — needs user action.  (d) Phase 5 is dormant per D5
+  (permanent minimal fork end-state).
+- Next: user-driven PR submission (opportunistic, web UI or after
+  installing =gh=) plus the live interactive smoke test in a dev
+  session.
+
+**** Merge of feature/fork-retirement into feature/gptel-callback-migration
+- Resolution direction: THEIRS (=feature/fork-retirement=, commits
+  2026-08-11/12), because theirs is later deliberate work that
+  supersedes ours' (=feature/gptel-callback-migration=) 2026-08-07
+  reverts (=cfc07b9= / =c6a46e5=).
+- =gptel-request.el= =gptel-tool= struct: kept theirs' generic
+  =(properties nil :type list ...)= slot, dropping ours' =(org-output
+  nil :type boolean ...)= (Decision D6).
+- =gptel.el= =gptel--insert-response= reasoning branch: kept theirs'
+  vanilla-upstream =#+begin_reasoning= / =#+end_reasoning= fences +
+  =org-cycle= folding + =gptel-pre/post-reasoning-hook= seam.  Dropped
+  ours' org-mode raw-text "REASONED heading" path (dead code for siro,
+  which renders REASONED itself via =siro-orga-send--on-reasoning=).
+- =gptel.el= =gptel--display-reasoning-stream=: same, theirs' streaming
+  counterpart.
+- Two silent auto-merge corrections (see Merge resolution notes below):
+  restored the =gptel-pre-reasoning-hook= / =gptel-post-reasoning-hook=
+  defcustoms and the =:id= key in the pre/post-tool-call hook plists.
+- Submodule =test= conflict (base =9415674=, ours =0d95a1b=, theirs
+  =53481c8=): ours was NOT an ancestor of theirs and carried 2 unique
+  commits (=gptel-org-test.el= +314, =gptel-request-test.el= +235,
+  =gptel-test-backends.el= +3).  File sets were disjoint, so a real
+  submodule merge was made: commit =42bad3f= on submodule branch
+  =merge/callback-migration-tests=.  Parent index now records
+  =160000 42bad3f ... test=.
+- Latent bug found by the newly-merged tests and fixed in
+  =gptel-request.el= =gptel--handle-tool-use= (auto-approved branch,
+  ~line 2073): the pre-execution =tool-call= notification did an
+  unguarded =(funcall (plist-get info :callback) ...)=, crashing with
+  =(void-function nil)= when =info= has no =:callback= (programmatic
+  use).  Now guarded with =when-let*=.
+- Verification: 28/28 tests pass (=tests/gptel-fork-test.el= +
+  =tests/gptel-request-test.el=); byte-compile clean apart from 2
+  pre-existing warnings (=provided-mode-derived-p= arity at
+  =gptel-request.el:1086=; =gptel-tool-properties= docstring width at
+  =:1534=).
+
+*** Merge resolution notes
+- *WARNING:* =git merge= silently auto-resolved two conflicts OUTSIDE
+  the visible conflict markers, contradicting the staged patch series
+  and tests.  The merge deleted the =gptel-pre-reasoning-hook= /
+  =gptel-post-reasoning-hook= defcustoms and the =:id= key in the
+  pre/post-tool-call hook plists (a revert-vs-untouched pattern
+  resolved to deletion).  These were manually restored.  Future merges
+  of this branch pair (=feature/fork-retirement= ↔
+  =feature/gptel-callback-migration=) MUST re-check for this pattern.
+- The submodule was uninitialized in =/home/urho/gptel= (empty =test/=
+  dir), so the pointer had to be recorded via
+  =git update-index --index-info= rather than =git add test=.
+- The submodule merge lives on submodule branch
+  =merge/callback-migration-tests= (commit =42bad3f=), pushed to gitea
+  =external/gptel-test.git=.
+- No entry from =siro-orga.org='s =Conflict resolution guide= was used
+  — that guide currently has no entries.
+- Known doc-hygiene issue: the fork-retirement TODO ("Update gptel from
+  upstream and plan fork retirement") appears TWICE as a heading under
+  =* TODOs= — a stale first copy at ~L26 and this authoritative copy at
+  ~L1980.  The L26 copy is out of scope for this task but should be
+  cleaned up in a future doc-hygiene pass.
+
+** AI-DO Migrate gptel-agent :org-output caller to the generic :properties slot
+*** Origin
+- Initiating user: urho.  Trigger: discovered while completing the
+  fork-retirement merge into =feature/gptel-callback-migration=; the
+  =gptel-tool= struct's =org-output= boolean slot was replaced by a
+  generic =properties= plist slot (Decision D6).
+*** Discussion highlights
+- =/home/urho/gptel-agent/gptel-agent-tools.el:2060= still passes
+  =:org-output t= to =gptel-make-tool=.  Because the =gptel-tool=
+  constructor accepts =&allow-other-keys=, the keyword is now *silently
+  dropped* rather than erroring, so the Agent tool loses its org-safe
+  flag with no diagnostic.
+- siro-orga is already fully migrated:
+  - Setters: =siro-agent-tools-org.el:411,445,479= and
+    =siro-orga-send.el:1441= pass =:properties '(:org-output t)=.
+  - Readers: =siro-gptel-hooks.el:3568,4100-4101= use
+    =(plist-get (gptel-tool-properties spec) :org-output)=.
+*** Decisions
+- Cross-repo coordination constraint: the =properties= slot exists only
+  on the gptel fork's =feature/*= branches, NOT on =orga-stable= /
+  =gptel-stable=.  =gptel-agent='s =orga= branch currently runs against
+  stable gptel, so flipping the caller to =:properties= immediately
+  would break it against =orga-stable=.
+- Options:
+  - (a) Wait for the feature branch to be promoted to stable, then flip
+    the caller in one atomic cross-repo change.
+  - (b) Make the caller pass BOTH keys during the transition window —
+    =&allow-other-keys= makes the unknown one harmless on each side.
+*** Mission
+- Update the =gptel-agent= caller to =:properties '(:org-output t)= in
+  step with the gptel slot change reaching stable, so the Agent tool's
+  org-safe flag is honoured again.
+*** TODOs
+1. Confirm no other =:org-output=-style direct keyword callers remain
+   in =gptel-agent=.
+2. Flip =gptel-agent-tools.el:2060= from =:org-output t= to
+   =:properties '(:org-output t)=.
+3. Update the stale prose at =/home/urho/siro-orga/siro-orga.org:483-488=,
+   which still describes the old boolean =org-output= slot.
+*** Outcomes / Results
+- (task not started)
