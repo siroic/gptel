@@ -197,44 +197,44 @@ index 0000000..15b5585
 +;; fed back to the LLM) when required arguments are missing.  Hence no
 +;; `should-error' anywhere below.
 +
-+(defun gptel-fork-test--tool (&rest args)
++(defun gptel-tool-args-test--tool (&rest args)
 +  "Make a gptel-tool via the internal constructor (no global registration)."
 +  (apply #'gptel--make-tool-internal args))
 +
-+(defconst gptel-fork-test--args
++(defconst gptel-tool-args-test--args
 +  '((:name "location" :type string :description "d")
 +    (:name "unit" :type string :description "d" :optional t)))
 +
-+(ert-deftest gptel-fork-validate-tool-args-happy ()
++(ert-deftest gptel-tool-args-test-validate-tool-args-happy ()
 +  "All required arguments present -> nil (valid)."
-+  (let ((tool (gptel-fork-test--tool
++  (let ((tool (gptel-tool-args-test--tool
 +               :name "test_tool" :description "d"
-+               :function #'ignore :args gptel-fork-test--args)))
++               :function #'ignore :args gptel-tool-args-test--args)))
 +    (should-not (gptel--validate-tool-args
 +                 tool (list :location "Paris" :unit "C")))))
 +
-+(ert-deftest gptel-fork-validate-tool-args-missing ()
++(ert-deftest gptel-tool-args-test-validate-tool-args-missing ()
 +  "Missing required argument -> error STRING naming tool and argument."
-+  (let* ((tool (gptel-fork-test--tool
++  (let* ((tool (gptel-tool-args-test--tool
 +                :name "test_tool" :description "d"
-+                :function #'ignore :args gptel-fork-test--args))
++                :function #'ignore :args gptel-tool-args-test--args))
 +         (err (gptel--validate-tool-args tool (list :unit "C"))))
 +    (should (stringp err))
 +    (should (string-match-p (regexp-quote "test_tool") err))
 +    (should (string-match-p (regexp-quote "location") err))))
 +
-+(ert-deftest gptel-fork-validate-tool-args-optional ()
++(ert-deftest gptel-tool-args-test-validate-tool-args-optional ()
 +  "Omitting an :optional argument is fine -> nil."
-+  (let ((tool (gptel-fork-test--tool
++  (let ((tool (gptel-tool-args-test--tool
 +               :name "test_tool" :description "d"
-+               :function #'ignore :args gptel-fork-test--args)))
++               :function #'ignore :args gptel-tool-args-test--args)))
 +    (should-not (gptel--validate-tool-args tool (list :location "Paris")))))
 +
-+(ert-deftest gptel-fork-validate-tool-args-explicit-nil ()
++(ert-deftest gptel-tool-args-test-validate-tool-args-explicit-nil ()
 +  "Explicit nil value counts as present (`plist-member' semantics) -> nil."
-+  (let ((tool (gptel-fork-test--tool
++  (let ((tool (gptel-tool-args-test--tool
 +               :name "test_tool" :description "d"
-+               :function #'ignore :args gptel-fork-test--args)))
++               :function #'ignore :args gptel-tool-args-test--args)))
 +    (should-not (gptel--validate-tool-args tool (list :location nil)))))
 +
 +

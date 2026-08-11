@@ -137,7 +137,7 @@ index 0000000..47e8412
 +(require 'ert)
 +(require 'gptel)
 +
-+(ert-deftest gptel-fork-current-fsm-bound-during-handler-dispatch ()
++(ert-deftest gptel-current-fsm-test-current-fsm-bound-during-handler-dispatch ()
 +  "`gptel--current-fsm' is bound while state handlers run, nil outside."
 +  (should-not gptel--current-fsm)
 +  (should-not (gptel-current-info))

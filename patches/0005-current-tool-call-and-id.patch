@@ -113,20 +113,20 @@ index 0000000..077cd20
 +(require 'cl-lib)
 +(require 'gptel)
 +
-+(defun gptel-fork-test--tool (&rest args)
++(defun gptel-current-tool-call-test--tool (&rest args)
 +  "Make a gptel-tool via the internal constructor (no global registration)."
 +  (apply #'gptel--make-tool-internal args))
 +
 +
 +;;;; gptel--current-tool-call
 +
-+(ert-deftest gptel-fork-current-tool-call-bound-during-tool-invocation ()
++(ert-deftest gptel-current-tool-call-test-current-tool-call-bound-during-tool-invocation ()
 +  "`gptel--current-tool-call' is bound to the tool-call plist during the call."
 +  (should-not gptel--current-tool-call)
-+  (let* ((buf (generate-new-buffer " *gptel-fork-test-tool*"))
++  (let* ((buf (generate-new-buffer " *gptel-current-tool-call-test-tool*"))
 +         (captured nil)
 +         (gptel-confirm-tool-calls nil)
-+         (tool (gptel-fork-test--tool
++         (tool (gptel-current-tool-call-test--tool
 +                :name "test_tool" :description "d"
 +                :args '((:name "location" :type string :description "d"))
 +                :function (lambda (_location)
@@ -149,9 +149,9 @@ index 0000000..077cd20
 +
 +;;;; :id in tool-call hook plists
 +
-+(ert-deftest gptel-fork-pre-tool-call-hook-receives-id ()
++(ert-deftest gptel-current-tool-call-test-pre-tool-call-hook-receives-id ()
 +  "`gptel-pre-tool-call-functions' receives a plist including the :id."
-+  (let ((buf (generate-new-buffer " *gptel-fork-test-pre-tool*"))
++  (let ((buf (generate-new-buffer " *gptel-current-tool-call-test-pre-tool*"))
 +        (captured nil))
 +    (unwind-protect
 +        (progn
@@ -170,9 +170,9 @@ index 0000000..077cd20
 +            (should (equal (plist-get captured :args) (list :a 1)))))
 +      (when (buffer-live-p buf) (kill-buffer buf)))))
 +
-+(ert-deftest gptel-fork-post-tool-call-hook-receives-id ()
++(ert-deftest gptel-current-tool-call-test-post-tool-call-hook-receives-id ()
 +  "`gptel-post-tool-call-functions' receives a plist with :id and :result."
-+  (let ((buf (generate-new-buffer " *gptel-fork-test-post-tool*"))
++  (let ((buf (generate-new-buffer " *gptel-current-tool-call-test-post-tool*"))
 +        (captured nil))
 +    (unwind-protect
 +        (progn

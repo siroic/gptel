@@ -96,13 +96,13 @@ index 0000000..1960508
 +(require 'gptel)
 +(require 'gptel-anthropic)
 +
-+(defun gptel-fork-test--anthropic-backend ()
++(defun gptel-anthropic-reasoning-test--anthropic-backend ()
 +  (gptel--make-anthropic :name "test" :host "example.com"
 +                         :endpoint "/v1/messages" :models nil))
 +
-+(ert-deftest gptel-fork-anthropic-empty-thinking-no-reasoning ()
++(ert-deftest gptel-anthropic-reasoning-test-anthropic-empty-thinking-no-reasoning ()
 +  "An empty thinking block does not set :reasoning at all."
-+  (let* ((backend (gptel-fork-test--anthropic-backend))
++  (let* ((backend (gptel-anthropic-reasoning-test--anthropic-backend))
 +         (info (list :data 'ignored))
 +         (response (list :content (vector (list :type "thinking" :thinking "")
 +                                          (list :type "text" :text "hello"))))
@@ -110,9 +110,9 @@ index 0000000..1960508
 +    (should (equal out "hello"))
 +    (should-not (plist-member info :reasoning))))
 +
-+(ert-deftest gptel-fork-anthropic-nonempty-thinking-sets-reasoning ()
++(ert-deftest gptel-anthropic-reasoning-test-anthropic-nonempty-thinking-sets-reasoning ()
 +  "A non-empty thinking block is accumulated into info :reasoning."
-+  (let* ((backend (gptel-fork-test--anthropic-backend))
++  (let* ((backend (gptel-anthropic-reasoning-test--anthropic-backend))
 +         (info (list :data 'ignored))
 +         (response (list :content (vector (list :type "thinking" :thinking "let me think")
 +                                          (list :type "text" :text "hello"))))

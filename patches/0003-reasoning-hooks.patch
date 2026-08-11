@@ -115,9 +115,9 @@ index 0000000..fef5f1c
 +(require 'ert)
 +(require 'gptel)
 +
-+(ert-deftest gptel-fork-reasoning-hooks-stream ()
++(ert-deftest gptel-reasoning-hooks-test-reasoning-hooks-stream ()
 +  "Streaming reasoning runs pre- then post-reasoning hooks."
-+  (let* ((buf (generate-new-buffer " *gptel-fork-test-reason*"))
++  (let* ((buf (generate-new-buffer " *gptel-reasoning-hooks-test-reason*"))
 +         (order nil))
 +    (unwind-protect
 +        (let* ((pos (with-current-buffer buf
@@ -134,9 +134,9 @@ index 0000000..fef5f1c
 +        (with-current-buffer buf (set-buffer-modified-p nil))
 +        (kill-buffer buf)))))
 +
-+(ert-deftest gptel-fork-reasoning-hooks-non-streaming ()
++(ert-deftest gptel-reasoning-hooks-test-reasoning-hooks-non-streaming ()
 +  "Non-streaming reasoning insertion runs pre- then post-reasoning hooks."
-+  (let* ((buf (generate-new-buffer " *gptel-fork-test-reason2*"))
++  (let* ((buf (generate-new-buffer " *gptel-reasoning-hooks-test-reason2*"))
 +         (order nil))
 +    (unwind-protect
 +        (let* ((pos (with-current-buffer buf

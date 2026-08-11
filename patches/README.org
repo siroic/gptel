@@ -265,9 +265,15 @@ No conflict arises in any of these cases.
 - Upstream keeps its tests in a =test= git submodule and has no plain
   =tests/= directory.  Each unit's test file here is added under =tests/=,
   so a maintainer may want them relocated into the submodule's layout.
-- The extracted tests keep their original =gptel-fork-*= test-name prefix
-  (and unit 7 mixes =gptel-fork-validate-*= with =gptel--sanitize-string-*=
-  names).  A cosmetic rename pass is advisable before submitting upstream.
+- The extracted tests have been renamed off the fork's original
+  =gptel-fork-*= prefix onto a per-unit prefix (unit 1
+  =gptel-anthropic-reasoning-test-*=, unit 2 =gptel-read-only-strip-test-*=,
+  unit 3 =gptel-reasoning-hooks-test-*=, unit 4 =gptel-current-fsm-test-*=,
+  unit 5 =gptel-current-tool-call-test-*=, unit 6 =gptel-abort-test-*=,
+  unit 7 =gptel-tool-args-test-*=, unit 8
+  =gptel-context-prefer-buffer-test-*=).  Unit 7 additionally keeps some
+  =gptel--sanitize-string-*= test names, which already match the function
+  under test.
 - The fork's own characterization suite =tests/gptel-fork-test.el= is
   intentionally left untouched on the branch; the per-unit test files
   duplicate its tests.

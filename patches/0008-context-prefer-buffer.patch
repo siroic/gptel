@@ -134,10 +134,10 @@ index 0000000..aeb3fbd
 +(require 'gptel)
 +(require 'gptel-context)
 +
-+(ert-deftest gptel-fork-context-prefer-buffer ()
++(ert-deftest gptel-context-prefer-buffer-test-context-prefer-buffer ()
 +  "When non-nil, unsaved buffer contents win over on-disk contents."
 +  (let* ((kill-buffer-query-functions nil)
-+         (file (make-temp-file "gptel-fork-test-" nil ".txt" "disk contents\n"))
++         (file (make-temp-file "gptel-context-prefer-buffer-test-" nil ".txt" "disk contents\n"))
 +         (buf nil))
 +    (unwind-protect
 +        (progn

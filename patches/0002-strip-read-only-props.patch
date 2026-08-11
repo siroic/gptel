@@ -90,9 +90,9 @@ index 0000000..282efd0
 +(require 'cl-lib)
 +(require 'gptel)
 +
-+(ert-deftest gptel-fork-with-buffer-copy-strips-read-only ()
++(ert-deftest gptel-read-only-strip-test-with-buffer-copy-strips-read-only ()
 +  "The prompt copy has `read-only' properties stripped, so it stays editable."
-+  (let ((src (generate-new-buffer " *gptel-fork-test-src*"))
++  (let ((src (generate-new-buffer " *gptel-read-only-strip-test-src*"))
 +        (beg nil) (end nil))
 +    (unwind-protect
 +        (progn

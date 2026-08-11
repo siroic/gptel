@@ -186,12 +186,12 @@ index 0000000..7c1b09f
 +
 +;;;; gptel--kill-tool-processes
 +
-+(ert-deftest gptel-fork-kill-tool-processes ()
++(ert-deftest gptel-abort-test-kill-tool-processes ()
 +  "Live tool processes are killed, their buffers killed, slot cleared."
 +  (skip-unless (executable-find "sleep"))
 +  (let* ((kill-buffer-query-functions nil) ; batch safety: no "running process?" prompt
-+         (buf (generate-new-buffer " *gptel-fork-test-proc*"))
-+         (proc (start-process "gptel-fork-test-sleep" buf "sleep" "100"))
++         (buf (generate-new-buffer " *gptel-abort-test-proc*"))
++         (proc (start-process "gptel-abort-test-sleep" buf "sleep" "100"))
 +         (info (list :tool-processes (list proc))))
 +    (unwind-protect
 +        (progn
@@ -210,9 +210,9 @@ index 0000000..7c1b09f
 +
 +;;;; gptel-abort
 +
-+(ert-deftest gptel-fork-abort-records-reason-and-cause ()
++(ert-deftest gptel-abort-test-abort-records-reason-and-cause ()
 +  "`gptel-abort' records :abort-reason/:abort-cause, calls abort-fn, -> ABRT."
-+  (let* ((buf (generate-new-buffer " *gptel-fork-test-abort*"))
++  (let* ((buf (generate-new-buffer " *gptel-abort-test-abort*"))
 +         (called nil)
 +         (info (list :buffer buf))
 +         (fsm (gptel-make-fsm :state 'TYPE :table nil :handlers nil :info info))
@@ -227,9 +227,9 @@ index 0000000..7c1b09f
 +          (should (eq (gptel-fsm-state fsm) 'ABRT)))
 +      (when (buffer-live-p buf) (kill-buffer buf)))))
 +
-+(ert-deftest gptel-fork-abort-defaults-to-user ()
++(ert-deftest gptel-abort-test-abort-defaults-to-user ()
 +  "Without REASON, the abort reason defaults to `user'; no :abort-cause."
-+  (let* ((buf (generate-new-buffer " *gptel-fork-test-abort2*"))
++  (let* ((buf (generate-new-buffer " *gptel-abort-test-abort2*"))
 +         (info (list :buffer buf))
 +         (fsm (gptel-make-fsm :state 'TYPE :table nil :handlers nil :info info))
 +         (gptel--request-alist
