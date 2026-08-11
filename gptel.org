@@ -2159,7 +2159,7 @@ seams, then retire.
 ***** AI-DONE Decide rebase vs merge and record the decision
 - See Q1.  Needs user input; do not proceed on a guess.
 - Decided by user feedback: MERGE (Decision D4).
-***** AI-DO Absorb the 38 upstream commits and resolve the known conflicts
+***** AI-DONE Absorb the 38 upstream commits and resolve the known conflicts
 - Expected remaining conflicts after Phase 2, in order:
   =gptel-request.el= vs the curl stdin/=--config= overhaul (=cb0552a=,
   =9ff70ce=) around =gptel--current-fsm= bindings;
@@ -2170,11 +2170,26 @@ seams, then retire.
   function, should auto-merge).
 - Absorb upstream's obsoletion of =gptel-curl-file-size-threshold= and
   check nothing in =~/siro-orga= references it.
-***** AI-DO Verify against upstream's new curl request path
+- Done: merge commit =616b5dc= ("Merge upstream origin/master into
+  feature/fork-retirement (Phase 3)") on =feature/fork-retirement=.
+- Post-merge verification: 28/28 tests pass (11/11
+  =gptel-request-test.el=, 17/17 =gptel-fork-test.el=); byte-compile
+  clean (6 pre-existing warnings, no errors).
+- =gptel-curl-file-size-threshold= still exists upstream (marked
+  obsolete); =~/siro-orga= has zero references — no action needed.
+***** AI-DONE Verify against upstream's new curl request path
 - Upstream now sends the payload via stdin + =--config=.  Re-run the
   full test net plus a live smoke test of streaming, tool calls, abort,
   and reasoning, since our FSM bindings sit in the refactored code.
-***** AI-DO Audit =~/siro-orga= against the updated gptel
+- Done (batch): full test net green post-merge; curl stdin +
+  =--config= path present (=gptel-request.el:3015=); our
+  =gptel--current-fsm= bindings survive in the refactored
+  response/stream handlers (=gptel-request.el:2832,3113,3189=).
+- REMAINING: live interactive smoke test (streaming, tool calls,
+  abort, reasoning) must run in a =SIRO_DEV=1= dev session — the
+  stable AI session cannot load feature-branch code.  Deferred to the
+  user / a dev-session run before Phase 5's retirement gate.
+***** AI-DONE Audit =~/siro-orga= against the updated gptel
 - Grep =~/siro-orga= for every gptel internal it references
   (=declare-function= list in =siro-gptel-hooks.el=, =gptel--fsm-transition=,
   =gptel--validate-tool-args=, =gptel--map-tool-args=, =gptel--to-string=,
@@ -2183,6 +2198,19 @@ seams, then retire.
 - Fix any drift in =~/siro-orga= in the same task; update
   [[file:../siro-orga/siro-orga.org::*Design patterns][Design patterns]] if a
   pattern changes.
+- Done: all 16 referenced gptel internals exist with
+  signature-compatible definitions (declare-function list in
+  =siro-gptel-hooks.el= matches exactly; =gptel-abort= 1/3-arg call
+  sites fit =(buf &optional reason cause)=).
+- The org-output→properties migration flagged under Phase 2 is
+  ALREADY COMPLETE in =~/siro-orga=: all sites use
+  =:properties '(:org-output t)= and =(plist-get
+  (gptel-tool-properties spec) :org-output)=; no =gptel-tool-org-output=
+  accessor references remain.
+- FSM reuse intact: =gptel-send--transitions= / =gptel-send--handlers=
+  (=gptel.el:1274,1290=) and the =gptel-fsm= struct
+  (=gptel-request.el:1884=) match siro-orga's usage.
+- No drift found; no siro-orga fixes required.
 **** Phase 4 — Upstream the seams
 ***** AI-DO Split the seam patches into independent, upstreamable units
 - One unit per seam, each self-contained with tests and a rationale:
@@ -2218,6 +2246,13 @@ seams, then retire.
   vanilla-upstream setup.
 - Keep the deprecated-fork archaeology note: fork history remains the
   record of why each seam exists.
+*** Important notes
+- =git pull --rebase= on =feature/fork-retirement= FLATTENS the Phase 3
+  merge commit and replays the 38 upstream commits, producing spurious
+  conflicts (observed at =def96c7=, NEWS + gptel-anthropic.el).  While
+  this branch carries the merge and the mirrors are behind, sync it by
+  PLAIN PUSH only; if a pull is ever needed, use
+  =git pull --no-rebase= or =--rebase=merges=.
 *** Outcomes / Results
 - Phase 0 baseline (2026-08-11, branch =feature/fork-retirement= off
   =orga= @ =d7d2f1b=): 11/11 tests pass in =tests/gptel-request-test.el=
@@ -2240,6 +2275,11 @@ seams, then retire.
   validate/sanitize/kill-processes, read-only stripping, claude-opus-5
   model entries, pre-tool error propagation, and the generic
   =properties= tool slot.
-- Next: Phase 3 merge of =origin/master= (Decision D4); before
-  siro-orga adopts the merged gptel, complete the org-output→properties
-  migration noted under Phase 2.
+- Phase 3 complete (2026-08-11, by urho's session): upstream merged as
+  =616b5dc=; 28/28 tests green; byte-compile clean; siro-orga audit
+  found zero drift (org-output→properties migration already done
+  siro-side).  Live interactive smoke test still pending in a dev
+  session.
+- Next: Phase 4 seam-unit PR preparation (opportunistic per D5,
+  tracked in siro-orga.org) and Phase 5 retirement gate after the
+  live smoke test passes.
