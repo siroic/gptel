@@ -4,11 +4,11 @@
 * Upstreamable patch series (fork retirement)
 
 This directory holds the remaining generic "seams" of the =~/gptel= fork,
-split into 12 independent, self-contained units that are each a candidate
+split into 13 independent, self-contained units that are each a candidate
 for an upstream PR against =karthink/gptel=.
 
 Every patch was generated against, and verified to apply cleanly on,
-vanilla =origin/master= (commit =fc69636=): all 12 are =git apply
+vanilla =origin/master= (commit =fc69636=): all 13 are =git apply
 --check=-clean and =git am=-clean there.  Each unit that carries tests was
 additionally verified by applying it *alone* to vanilla and running its
 embedded ERT test file green.
@@ -16,21 +16,21 @@ embedded ERT test file green.
 The units are *independent PR candidates*, not a stacked series.  They are
 therefore allowed to conflict textually with one another; the known
 conflicts are documented below.  Semantically all of them compose — the
-fork ran with all 12 applied at once.
+fork ran with all 13 applied at once.
 
 ** Verification summary
 
-- All 12 patches pass =git -C <vanilla-worktree> apply --check= on
+- All 13 patches pass =git -C <vanilla-worktree> apply --check= on
   =origin/master= (=fc69636=).
 - Units 1–8 pass =git am= on vanilla *alone* and their own ERT test file
   runs green there.  Test counts: 1 → 2 tests, 2 → 1, 3 → 2, 4 → 1,
   5 → 3, 6 → 3, 7 → 15, 8 → 1 — *28 tests total, all passing*.
-- Units 9–12 carry no tests; the reason is stated per unit below (inert
+- Units 9–13 carry no tests; the reason is stated per unit below (inert
   struct slot, removal of error demotion, defensive guards needing a race
-  to reach, and pure model data respectively).
+  to reach, pure model data, and an interactive-only transient/rewrite flow
+  respectively).
 - A line-level coverage audit of the full fork diff was performed: *483
-  changed lines audited*, all accounted for by these 12 units except the
-  unassigned hunks listed in [[*Unassigned hunks][Unassigned hunks]].
+  changed lines audited*, all accounted for by these 13 units.
 
 ** Units
 
@@ -197,6 +197,22 @@ fork ran with all 12 applied at once.
 - Test :: None.  Model/backend data addition, nothing executable to
   assert.
 
+*** =0013-fsm-table-at-menu-rewrite= — gptel: Pass :table at menu and rewrite FSM creation
+
+- Rationale :: =gptel-rewrite= and the =gptel-menu= send path create their
+  FSM with =gptel-make-fsm= and a handler table (=gptel--rewrite-handlers=
+  and =gptel-send--handlers=) that registers a handler for the TPRE state.
+  TPRE exists only in =gptel-send--transitions=; without an explicit
+  =:table= the FSM uses the default =gptel-request--transitions=, that
+  state is never entered and the TPRE handlers never fire.  Both call sites
+  now pass =:table gptel-send--transitions= so the handler table and the
+  transition table agree.  Generic bugfix (fork commit =9140658=).
+- Files touched :: =gptel-rewrite.el=, =gptel-transient.el=
+- Test :: None.  Requires an interactive transient/rewrite flow; the
+  behaviour is covered by TPRE handler registration.
+- Conflicts :: None known.  No other unit touches =gptel-rewrite.el= or
+  =gptel-transient.el=.
+
 ** Known mutual conflicts
 
 Because the units are independent PR candidates rather than a stack, some
@@ -243,24 +259,6 @@ semantically — the fork carried all three at once.
 - 2 / 4 / 9 touch =gptel-request.el= in disjoint regions.
 
 No conflict arises in any of these cases.
-
-** Unassigned hunks
-
-Two hunks of the full fork diff are deliberately *not* part of any unit:
-
-- =gptel-rewrite.el= — the =gptel-rewrite= request setup.
-- =gptel-transient.el= — the =gptel-menu= send path.
-
-Both change =(gptel-make-fsm :handlers ...)= to also pass
-=:table gptel-send--transitions=, because those handler tables register a
-TPRE handler and TPRE exists only in =gptel-send--transitions=, not in the
-default =gptel-request--transitions=.
-
-Together these two hunks form a coherent potential *13th unit* and an
-upstream bug candidate: the handlers' state table and the FSM's transition
-table must agree.  They were left out only because they fell outside the
-agreed Phase 4 partition.  They should be split out as unit =0013= before
-submitting — not dropped.
 
 ** Caveats / follow-ups
 
